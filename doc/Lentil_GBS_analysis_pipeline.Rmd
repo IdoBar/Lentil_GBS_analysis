@@ -1,0 +1,911 @@
+---
+title: "Lentil Resistance to Ascochyta QTL Mapping"
+subtitle: "Genome-by-Sequencing (ddRAD) Analysis"
+author: "Ido Bar"
+date: "10/10/2017"
+output: 
+    html_document:
+      toc: true
+      toc_depth: 3
+      toc_float: true
+      highlight: pygments
+      number_sections: false
+      code_folding: hide
+bibliography: style/GBS_analysis.bib
+csl: style/springer-basic-improved-author-date-with-italic-et-al-period.csl
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(list(echo = TRUE, eval=FALSE, message=FALSE))
+# load my utilities from Gist (https://gist.github.com/IdoBar/7f63547158ecdbacf31b54a58af0d1cc)
+# devtools::source_gist("7f63547158ecdbacf31b54a58af0d1cc", filename = "util.R")
+pacman::p_load(char = c("tidyverse", "captioner", "knitr", "pander", "DT"))
+# Font Format
+custom_font="consolas"
+fontFmt = function(x,font="consolas"){
+  #outputFormat = knitr::opts_knit$get("rmarkdown.pandoc.to")
+  #if (outputFormat == 'html')
+  formatted_text <- sprintf("<font face='%s'>%s</font>",font,x)
+  return(formatted_text)
+  #else
+  #  x
+}
+
+```
+
+```{r init_captions, include=FALSE, eval=TRUE}
+figs <- captioner(prefix="Figure")
+tbls <- captioner(prefix="Table")
+tbls(name="GBS_read_table", "Details of GBS read files for each sample.")
+tbls(name="param_estimates", "Effect of Stacks denovo parameters on number of loci and estimated error rates.")
+figs(name="error_rates_expl", "Error types between replicates in RAD-Seq.")
+# Read in metadata
+GBS_read_data <- readxl::read_excel("../AGRF_CAGRF14978_CB2YGANXX_gbs/GBS_Summary.xlsx") %>% 
+  filter(!grepl("NegControl", Sample)) %>%  mutate(Gen=if_else(grepl("^C", Sample), "F5", "Parent"))
+sum_GBS_read_data <- GBS_read_data %>% group_by(Gen) %>% summarize_at(c("Tags Total", "Average Tag Depth", "Reads"), .funs =  c("mean", "sum")) %>% as.data.frame(.)
+Progeny_num <- GBS_read_data %>% filter(Gen=="F5") %>% nrow(.)
+
+
+```
+
+## Study Description
+### Experimental Design
+Two distinct lentil (_Lens culinaris_) genotypes, resistant and susceptible to Ascochyta blight disease (**ILL7537** and **ILL6002**, respectively) were crossed and the F1 was recursively self-pollinated to create an F5 population. The population was sown and challenged with an inoculation of *Ascochyta lentis* (isolate AL4) and quantitatively phenotyped by four stem and leaf damage traits over the course of 4 weeks, at 7, 14, 21 and 28 days post inoculation (dpi).
+
+### Genotyping
+Both parent genotypes (3 replicates each) and their F5 (n=`r Progeny_num`) progeny population, as well as represantatives of "Boomer" cultivar, were sent for genotyping-by-sequencing (GBS; AGRF, Adelaide). The AGRF uses ddRAD-based library preparation protocol, based on @peterson_double_2012. The DNA was digested using a combination of restriction enzymes (EcoRI and MseI) and only tags with both RE sites (one in each end) were selected for library preparation and sequenced on 2 lanes of an Illumina HiSeq2500 sequencing platform, producing 100 bp single-end reads (see per sample sequencing details in `r tbls(name="GBS_read_table", display="cite")`).  
+In average, `r formatC(sum_GBS_read_data$Reads_mean[1], digits=3)` reads were sequenced for each F5 sample, covering `r formatC(sum_GBS_read_data[1,2], format="f", digits=0, big.mark=",")` tags (loci), at a depth of x`r formatC(sum_GBS_read_data[1,3], format="f",digits=1)`; whereas for the parent lines, it was `r formatC(sum_GBS_read_data$Reads_mean[2], digits=3)` reads, covering `r formatC(sum_GBS_read_data[2,2], format="f", digits=0, big.mark=",")` tags at a depth of x`r formatC(sum_GBS_read_data[2,3], format="f", digits=1)`.  
+Basic bioinformatics analysis was performed by AGRF, mainly running the [Stacks ](http://catchenlab.life.illinois.edu/stacks/) v1.47 pipeline [@catchen_stacks:_2011;@catchen_stacks:_2013] to build a catalogue of consensus tag sequences to call variants from each sample.
+
+```{r eval=TRUE}
+DT::datatable(GBS_read_data, caption = tbls(name="GBS_read_table"), rownames = FALSE)
+```
+
+### Analysis Approach
+1. Combine each parent read files to one file (to increase coverage for them)
+2. Call variants using `r fontFmt("Stacks2")` de novo
+3. Map catalog back to the lentil genome (v1.2)
+4. Filter output files (remove samples and loci with too much missing information)
+5. Match chromosomal position to each loci
+6. Perform linkage mapping inside each chromosome
+7. Identify linkage groups of un-linked markers from previous step
+8. QTL analysis and visualisation
+9. Annotation of SNPs under the QTLs
+
+## Methodologies
+
+
+### Stacks pipelines
+AGRF provided the results of the `r fontFmt("Stacks")` *de novo* pipeline, run as a general population of samples. Alternatively, run `r fontFmt("Stacks")` `ref_map.pl` and `denovo_map.pl` pipelines.  
+Other alternatives to `r fontFmt("Stacks")` are `r fontFmt("Heap")` or `r fontFmt("TASSEL")` [@glaubitz_tassel-gbs:_2014] 
+
+### Stacks2 pipeline
+A new version of `r fontFmt("Stacks")` (v2.0b) is now available and the recommended approach, even when a reference genome is available, is to incorporate reference the genome alignment information by building loci _de novo_ and subsequently integrating the alignments of the consensus sequences into their _de novo_ dataset [@ParisLostparameterspace2017]. 
+
+#### Assess errors in read files
+`kmer_filter` in `r fontFmt("Stacks")` was used to visualise the error profiles of the cleaned RAD-seq reads and the resulting K-mer frequency distributions were plotted. It seems that the overall error rate is low (most rare k-mers appear only once), but the coverage is also low 
+
+```{bash filter_kmer}
+# Combine read files from parents
+cd ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/fastq
+ls -1 ILL7537_00?_RF* | xargs cat > ILL7537_RF.fq.gz
+ls -1 ILL6002_00?_RF* | xargs cat > ILL6002_RF.fq.gz
+# backup original files
+my_rename -v 's/gz/gz.bak/' ILL*_00?_RF*
+# Prepare filter_kmer commands - process one file at a time
+JOB_NAME="filter_kmer"
+mkdir ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/fastq/kmer_filtered 
+cd !$
+DATE=`date +%d_%m_%Y`
+find ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/fastq -maxdepth 1 -name "*.fq.gz" | gawk '{n=split($1,a,"/"); name=gensub(/_[ACGT]+\.fq\.gz/, "", "1", a[n]); printf "pigz -cd %s > %s.fq \n", $1, name}' > ${JOB_NAME}_${DATE}.cmds
+
+# Prepare PBS script
+echo '#!/bin/bash 
+#PBS -V
+#PBS -l select=1:ncpus=1:mem=8GB,walltime=1:00:00
+#PBS -m be
+#PBS -M i.bar@griffith.edu.au
+
+cd $PBS_O_WORKDIR
+gawk -v ARRAY_IND=$PBS_ARRAY_INDEX "NR==ARRAY_IND" $CMDS_FILE | bash' > ${JOB_NAME}_${DATE}.pbs
+
+# submit the jobs to the scheduler
+JOBS_NUM=`wc -l ${JOB_NAME}_${DATE}.cmds | gawk '{print $1}'`
+qsub -J1-${JOBS_NUM} -N $JOB_NAME -v CMDS_FILE=${JOB_NAME}_${DATE}.cmds ${JOB_NAME}_${DATE}.pbs 
+# Job Array ID 4988299[]
+# to process all files at once - gunzip them to a folder and run on the entire folder
+$HOME/etc/tools/SNP/stacks-2.0/bin/kmer_filter -p ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/fastq/kmer_filtered -o ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/fastq/kmer_filtered --rare --abundant --write_k_freq all_files.kfreq
+```
+
+#### Parameter and error estimation using de novo pipeline
+A subset of samples was selected, including the parent replicates (non-combined) and 20 other randomally selected genotypes.  A _de novo_ pipeline was run several times with the selected samples, varying just one parameter with each parse of the program. For the primary analysis, we varied the `ustacks` **m** parameter from 3 to 7, the `ustacks` **M** parameter from 1 to 8 and the `cstacks` **n** parameter as $n=M\pm\ 1$, while keeping all other parameters consistent (`r fontFmt("Stacks")` defaults are m3, M2 and n0), as described by [@ParisLostparameterspace2017; @RochetteDerivinggenotypesRADseq2017; @Mastretta-YanesRestrictionsiteassociatedDNA2015a].
+
+
+```{bash estimate_params}
+# Sample selection
+JOB_NAME="denovo_param_est"
+DATE=`date +%d_%m_%Y`
+cd $HOME/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/fastq
+mkdir ${JOB_NAME}_$DATE && cd ${JOB_NAME}_$DATE
+# Link parent files into the folder 
+ls -1 ../*.fq.gz* | grep -vE "NegControl|/C|_RF.fq.gz" | xargs -I{} ln -s {} ./
+# link 20 sample files
+ls -1 ../*.fq.gz* | grep -vE "NegControl|/ILL" | sort -R | head -n 20 | xargs -I{} ln -s {} ./
+# rename filenames 
+my_rename -v 's/-I\d+_[ACGT]+.fq.gz[.bak]*/.fq.gz/' *
+# Create popmap
+ls -1 *.fq.gz | gawk '{sample=gensub(".fq.gz", "", "1", $1); printf "%s\tRIL5\n", sample}' > ${JOB_NAME}_popmap.txt
+
+# Create all the denovo jobs
+NCPUS=6
+# Add default parameters
+echo "mkdir -p ./stacks_M2m3n0/populations.r80; \$HOME/etc/tools/SNP/stacks-2.0/bin/denovo_map.pl -T $NCPUS -m 3 -M 2 -n 0 -o ./stacks_M2m3n0/ --samples ./ --popmap ./denovo_param_est_popmap.txt -X \"populations: --vcf --genepop\" && 
+\$HOME/etc/tools/SNP/stacks-2.0/bin/populations -t $NCPUS -P ./stacks_M2m3n0/ -O ./stacks_M2m3n0/populations.r80 -r 0.80 --vcf --genepop" > ${JOB_NAME}_$DATE.cmds
+# Then the rest of the combinations
+echo '#!/bin/bash
+for m in {3..7}; do
+  for M in {1..8}; do
+    for (( n = $(( M-1 )); n <= $(( M+1 )); n++ )); do
+      echo "mkdir -p ./stacks_M${M}m${m}n${n}/populations.r80; \$HOME/etc/tools/SNP/stacks-2.0/bin/denovo_map.pl -T $NCPUS -M $M -m $m -n $n -o ./stacks_M${M}m${m}n${n}/ --samples ./ --popmap ./denovo_param_est_popmap.txt -X \"populations: --vcf --genepop\" && \$HOME/etc/tools/SNP/stacks-2.0/bin/populations -t $NCPUS -P ./stacks_M${M}m${m}n${n}/ -O ./stacks_M${M}m${m}n${n}/populations.r80 -r 0.80 --vcf --genepop"
+    done  
+  done
+done' | bash >> ${JOB_NAME}_$DATE.cmds
+
+# mkdir ./stacks_M${M}m${m}n${n}/populations.r80 && $HOME/etc/tools/SNP/stacks-2.0/bin/populations -t 12 -P ./stacks_M${M}m${m}n${n}/ -O ./stacks_M${M}m${m}n${n}/populations.r80 -r 0.80 --vcf --genepop
+# Prepare PBS script
+echo '#!/bin/bash 
+#PBS -V
+#PBS -l select=1:ncpus=12:mem=16GB,walltime=100:00:00
+#PBS -m be
+#PBS -M i.bar@griffith.edu.au
+
+cd $PBS_O_WORKDIR
+gawk -v ARRAY_IND=$PBS_ARRAY_INDEX "NR==ARRAY_IND" $CMDS_FILE | bash' > ${JOB_NAME}_${DATE}.pbs
+
+# submit the jobs to the scheduler
+JOBS_NUM=`wc -l ${JOB_NAME}_${DATE}.cmds | gawk '{print $1}'`
+qsub -J1-${JOBS_NUM} -v CMDS_FILE=${JOB_NAME}_${DATE}.cmds -N ${JOB_NAME:0:11} ${JOB_NAME}_${DATE}.pbs 
+# Job ID 4989117[] also run on Awoonga - 75828[].awongmgmr1
+
+# extract the information from the log file of each parameter combination Stacks run
+find . -wholename "*populations.r80/populations.log" | xargs grep -Po "\d+\/\d+\/\d+" | gawk -F[/] 'BEGIN{printf "M_param\tm_param\tn_param\tAssembled_loci_r80\tPolymorphic_loci_r80\n"}{match($0, /stacks_M([0-9])m([0-9])n([0-9])/, params); match($0, /([0-9]+)\/([0-9]+)\/([0-9]+)/, vars); printf "%s\t%s\t%s\t%s\t%s\n",params[1],params[2], params[3], vars[1], vars[2]}' > denovo_param_est_r80_populations.log
+# extract the coverage information from the log file of each parameter combination Stacks run
+find . -name "denovo_map.log" | xargs grep -P "per-sample coverage" | gawk 'BEGIN{printf "M_param\tm_param\tn_param\tmean_coverage\tstdev_coverage\tmin_coverage\tmax_coverage\n"}{match($0, /stacks_M([0-9])m([0-9])n([0-9])/, params); match($0, /mean=([0-9\.]+)x.+=([0-9\.]+)x.+=([0-9\.]+)x.+=([0-9\.]+)x/, cov_stats); printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", params[1],params[2], params[3], cov_stats[1], cov_stats[2],cov_stats[3],cov_stats[4]}' > denovo_param_est_coverage.log
+# Get error rates
+Rscript process_params_vcf_files.R
+
+# Then copy denovo_param_est_r80_populations.log, denovo_param_est_coverage.log, stacks_param_error_rates_*.tsv to local computer (under GBS_analysis/data folder)
+
+```
+
+The resulting `.log` files were parsed to retrieve the following statistics:  
+1. The parameters __m__ and **M** and **N**  
+2. The number of assembled loci (from `populations.log` files)  
+3. The number of polymorphic loci shared across most samples (the r80 loci)  
+4. The distribution of the number of SNPs per locus (from `populations.snps.vcf` files)  
+5. The coverage per sample (from `denovo_map.log` files)  
+
+Replicate samples were used to estimate three error rates using R:  
+1. Locus error rate, corresponding to missing data at the locus level and measured as **the number of loci present in only one of the samples of a replicate pair**, divided by the total number of loci found.  
+2. Allele error rate, calculated as the **number of allele mismatches between replicate pairs, divided by the number of loci being compared** (all the SNPs within a tag).  
+3. SNP error rate, measured as the proportion of SNP mismatches between replicate pairs.  
+(See explanation in `r figs(name="error_rates_expl", display="cite")`)
+
+```{r eval=TRUE, out.width='100%', echo=FALSE, out.extra='style="background-color: #000000; padding:2px; display: inline-block;"'}
+knitr::include_graphics('./plots/RAD_errors.png')
+```
+`r figs(name="error_rates_expl")`
+
+A formula was used to balance between high number of polymorphic loci, coverage per sample and low error rates, identifying three optimal combinations of parameters favouring high number of polymorphic loci, low error rates and high coverage (*M2m3n3, M3m4n3 and M1m4n2*, highlighted in violet, green and blue, respectively in `r tbls(name="param_estimates", display="cite")`). 
+
+```{r param_stats, eval=TRUE}
+# read log files with loci stats
+param_stats <- read_tsv("data/denovo_param_est_r80_populations.log")
+
+#### coverage stats ####
+cov_stats <- read_tsv("data/denovo_param_est_coverage.log")#
+
+#### Error estimation between replicates  ####
+# Find most recent file
+error_rates_files <- file.info(list.files(path = "./data", 
+                                          pattern="stacks_param_error_rates.*.tsv", full.names = TRUE)) %>%
+  rownames_to_column(var = "filename")  %>% mutate_at(.vars = vars(ends_with("time")), as.POSIXct) %>%
+  arrange(desc(mtime))
+recent_file <- error_rates_files$filename[1]
+
+error_rates_results <- read_tsv(recent_file)
+
+errors_summed <- error_rates_results %>% group_by(M_param, m_param, n_param) %>%
+  summarise_at(.vars=c("locus_error_rate", "allele_error_rate"), .funs=mean)
+
+# Identify optimal combination
+allele_error_factor <- 6
+loci_error_factor <- 4
+cov_factor <- 250
+param_data <- inner_join(errors_summed, param_stats) %>% inner_join(., cov_stats[1:4]) %>%
+  mutate(Score=Polymorphic_loci_r80*(1-allele_error_factor*allele_error_rate-loci_error_factor*locus_error_rate) + mean_coverage*cov_factor) %>% ungroup() %>% 
+  arrange(desc(Score))
+param_table <- param_data %>% mutate_at(.vars=vars(ends_with("error_rate")), 
+                                        .funs = funs(sprintf("%.2f%%", .*100))) %>%
+  mutate_at(c("Assembled_loci_r80", "Polymorphic_loci_r80", "Score"), 
+            funs(formatC(., digits=0, big.mark=",", format="f"))) %>% 
+  mutate(param_combination=paste0("M", M_param,"m",m_param, "n", n_param), 
+         mean_coverage=sprintf("%.1fx", mean_coverage)) %>% rownames_to_column("Rank") %>%
+  select(Rank, param_combination, locus_error_rate, allele_error_rate, Assembled_loci_r80, 
+         Polymorphic_loci_r80, mean_coverage, Score)
+default_rank <- param_table %>% filter(param_combination=="M2m3n0") # %>% .$Rank
+
+DT::datatable(as.data.frame(param_table), caption = tbls(name="param_estimates"), 
+              rownames = FALSE, 
+              options = list(columnDefs = list(list(className = 'dt-center', targets ="_all")))) %>%
+  formatStyle('param_combination',
+  target = 'row',
+  backgroundColor = styleEqual(c("M1m4n2", "M2m3n3", "M3m4n3"), c('lightblue','violet', 'lightgreen'))
+)# %>% formatPercentage('D', 2)
+
+```
+
+
+For comparison, `r fontFmt("Stacks")` default parameters (m3, M2 and n0) resulted in a combined score of `r default_rank$Score` and was ranked #`r default_rank$Rank` out of `r nrow(param_table)` possible combinations. 
+
+
+#### Integrated de novo and genome-mapped approach
+Once identified, the optimal _de novo_ parameters were used for another _de novo_ run with all the samples (this time combining the parent read files to increase coverage). Once the _de novo_ pipeline was complete, the final catalog loci (now stored in `catalog.fa.gz`) were aligned to the genome with `r fontFmt("GSNAP")` version 2018-03-25 [@WuGMAPGSNAPGenomic2016a]. The `stacks_integrate_alignments` script was then used to integrate the alignments back into the `gstacks` files, followed by another `populations` run to assign genomic coordinates for each locus in the output files. (see [discussion](https://groups.google.com/d/msg/stacks-users/ZsAnJXCs8uo/P2BjXCCsAwAJ)). 
+
+
+```{bash stacks2_denovo_integrated}
+# Prepare run variables
+conda install -c bioconda gmap
+JOB_NAME="denovo_stacks2"
+DATE=`date +%d_%m_%Y`
+
+# prepare genome db
+GENOME="Lens_culinaris_v1.2"
+GENOME_PATH=$HOME/scratch/data/${GENOME}
+NCPUS=6
+echo "cd \$PBS_O_WORKDIR; gmap_build -d $GENOME -D $GENOME_PATH $GENOME_PATH/$GENOME.fasta" | \
+qsub -V -l select=1:ncpus=12:mem=12GB,walltime=01:00:00 -m be -M i.bar@griffith.edu.au -N gmap_build
+
+# Link files into the folder (excluding RL and NegControl ones)
+cd $HOME/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs
+mkdir ${JOB_NAME}_$DATE && cd ${JOB_NAME}_$DATE
+ls -1 $HOME/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/fastq/*.fq.gz* | grep -vE "NegControl|_RL-I|_RF-I5" | xargs -I{} ln -s {} ./
+# rename filenames 
+my_rename -v 's/-I\d+_[ACGT]+.fq.gz[.bak]*/.fq.gz/' *
+
+# Copy files to Awoonga to run there (add to 'module load gnu/7.1.0' to ~/.bash_profile and change file paths, such as replacing s2978925 with ibar...)
+rsync -zrvPhL ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/denovo_stacks2_29_05_2018/* ibar@awoonga.qriscloud.org.au:/90days/ibar/Lentil_GBS/
+
+# Create popmap
+ls -1 *.fq.gz | grep -vE "NegControl|_RL" | gawk '{sample=gensub(".fq.gz", "", "1", $1); printf "%s\tRIL5\n", sample}' > ${JOB_NAME}_popmap.txt
+
+# Copy the denovo jobs with the relevant parameters from the param estimate and add gsnap mapping step
+# don't forget to update popmap.txt file
+egrep "stacks_M3m4n3|stacks_M2m3n3|stacks_M2m3n2|stacks_M1m4n2" $HOME/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/fastq/denovo_param_est_21_05_2018/denovo_param_est_21_05_2018.cmds | sed -r "s|\S+_popmap.txt|./${JOB_NAME}_popmap.txt|g; s|mkdir|mkdir -p|g; s|80|50|g; s/T [0-9]+/T $NCPUS/g" | gawk -v ncpus=$NCPUS -v genome=$GENOME -v genome_path=$GENOME_PATH '{match($0, /(stacks_M[0-9]+m[0-9]+n[0-9]+)/, arr); printf "%s && cd %s; gsnap -m 5 -i 2 --min-coverage=0.95 -t %s --gunzip -A sam -d %s -D %s --split-output=catalog.gsnap catalog.fa.gz && mkdir -p integrated_alignments/populations.r50 && samtools view -Sb catalog.gsnap.unpaired_uniq -o catalog.gsnap.unpaired_uniq.bam && $HOME/etc/tools/SNP/stacks-2.0/bin/stacks-integrate-alignments -P ./ -B catalog.gsnap.unpaired_uniq.bam -O ./integrated_alignments &&  $HOME/etc/tools/SNP/stacks-2.0/bin/populations -t %s -P ./integrated_alignments -O ./integrated_alignments/populations.r50 -r 0.50 --vcf --genepop \n", $0 ,arr[1], ncpus, genome, genome_path, ncpus}' > denovo_optimal_params.cmds
+
+# Make PBS script
+echo '#!/bin/bash 
+#PBS -V
+#PBS -l select=1:ncpus=12:mem=32GB,walltime=120:00:00
+#PBS -m be
+#PBS -M i.bar@griffith.edu.au
+
+cd $PBS_O_WORKDIR
+gawk -v ARRAY_IND=$PBS_ARRAY_INDEX "NR==ARRAY_IND" $CMDS_FILE | bash' > ${JOB_NAME}_${DATE}.pbs
+
+# submit the jobs to the scheduler
+JOBS_NUM=`wc -l denovo_optimal_params.cmds | gawk '{print $1}'`
+qsub -J1-${JOBS_NUM} -v CMDS_FILE=denovo_optimal_params.cmds -N ${JOB_NAME:0:11} ${JOB_NAME}_${DATE}.pbs 
+# Job ID 4992159[] 
+
+```
+
+If running `r fontFmt("gsnap")` separately (after `denovo_map.pl` run):
+
+```{bash gsnap_catalog_map}
+conda install -c bioconda gmap
+GENOME="Lens_culinaris_v1.2"
+GENOME_PATH=$HOME/scratch/data/${GENOME}
+NCPUS=8
+JOB_NAME="integrate_genome_coords"
+# prepare genome db
+echo "cd \$PBS_O_WORKDIR; gmap_build -d $GENOME -D $GENOME_PATH $GENOME_PATH/$GENOME.fasta" | \
+qsub -V -l select=1:ncpus=8:mem=12GB,walltime=01:00:00 -m be -M i.bar@griffith.edu.au -N gmap_build
+
+# map catalog to genome
+cd ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/denovo_stacks2_29_05_2018
+
+ls -1d stacks_M* | gawk -v ncpus=$NCPUS -v genome=$GENOME -v genome_path=$GENOME_PATH '{printf "cd %s; gsnap -m 5 -i 2 --min-coverage=0.95 -t %s --gunzip -A sam -d %s -D %s --split-output=catalog.gsnap catalog.fa.gz && mkdir -p integrated_alignments/populations.r50 && samtools view -Sb catalog.gsnap.unpaired_uniq -o catalog.gsnap.unpaired_uniq.bam && $HOME/etc/tools/SNP/stacks-2.0/bin/stacks-integrate-alignments -P ./ -B catalog.gsnap.unpaired_uniq.bam -O ./integrated_alignments &&  $HOME/etc/tools/SNP/stacks-2.0/bin/populations -t %s -P ./integrated_alignments -O ./integrated_alignments/populations.r50 -r 0.50 --vcf --genepop\n", $0, ncpus, genome, genome_path, ncpus}'  |  grep -v "stacks_M2m3n2" > ${JOB_NAME}.cmds
+
+# submit the jobs to the scheduler
+JOBS_NUM=`wc -l ${JOB_NAME}.cmds | gawk '{print $1}'`
+qsub -J1-${JOBS_NUM} -v CMDS_FILE=${JOB_NAME}.cmds -N ${JOB_NAME:0:11} ${JOB_NAME}.pbs
+# then symlink the produced vcf files and copy to local
+find . -wholename "*populations.r50/populations.snps.vcf" | gawk '{target=gensub("/integrated_alignments/populations.r50/", "_", 1); printf "ln -s %s %s\n", $0, target}' | bash
+# then locally (git bash), run this (use -L to follow symlinks):
+rsync -hzPL s2978925@gowonda2.rcs.griffith.edu.au:~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/denovo_stacks2_29_05_2018/*_populations.snps.vcf ./
+
+```
+
+##### Access to the lentil Genome
+
+* An account has been created on the University of Saskatchewan web portal [KnowPulse](http://knowpulse.usask.ca/portal/)  
+Username: _Rebecca.ford\@griffith.edu.au_, Password: _Harrison8_  
+* Login and download the full sequence using the instructions on this [page](http://knowpulse2.usask.ca/portal/node/1466897) with the username: _rfAustralia_, Password: _NMQDesreRw_ (this is separate from your login information for KnowPulse to allow use of wget for download)
+
+#### Reference map pipeline
+The raw reads were multiplexed and barcodes and adaptors removed by `r fontFmt("Stacks")` `process_tags.pl`. Trimmed reads were mapped to the *L. culinaris* reference genome (v1.2;  [KnowPulse](http://knowpulse.usask.ca/portal/lentil-genome); @SandersonKnowPulsebreederfocused2011), using `r fontFmt("Bowtie2", custom_font)` (version 2.3.2) with the `--very-sensitive` option in `--end-to-end` (global) mode. The resulting SAM files were processed to mark duplicates with `r fontFmt("SAMBLASTER", custom_font)` v0.1.24 [@faust_samblaster:_2014], add read group information and convert into sorted BAM file with [Picard](https://broadinstitute.github.io/picard/) v2.5.0. Mapping quality and coverage were assessed with `r fontFmt("Qualimap2")` v2.2.2a  [@okonechnikov_qualimap_2016]. 
+
+Mapping to the genome:  
+
+```{bash map_reads_bowtie2}
+# Prepare sample metadata file
+cd $HOME/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs
+find `pwd`/fastq -maxdepth 1 -name "*.fq.gz" | gawk -vOFS="\t" 'BEGIN{print "sample","barcode","read_file_path" };{n=split($1,a,"/"); name=gensub(/_[ACGT]+\.fq\.gz/, "", "1", a[n]);  barcode=gensub(/.+_([ACGT]+)\.fq\.gz/, "\\1", "1", a[n]);print name,barcode, $1 }' > Lentil_GBS_read_info.txt
+
+# Prepare the lentil genome (v1.2)
+GENOME="Lens_culinaris_v1.2"
+mkdir ~/scratch/data/$GENOME
+wget --user='rfAustralia' --password='NMQDesreRw' http://knowpulse.usask.ca/sequences/genome_builds/lens_culinaris/Lensculinaris_genome_v1.2.fasta
+ln -s Lensculinaris_genome_v1.2.fasta $GENOME.fasta
+#pigz -cd $HOME/scratch/data/$GENOME/Lensculinaris_genome_v1.2.fasta.gz > $HOME/scratch/data/$GENOME/$GENOME.fasta
+# Retrieve gene models as well
+wget --user='rfAustralia' --password='NMQDesreRw' http://knowpulse.usask.ca/sequences/genome_builds/lens_culinaris/Lensculinaris_1.2b_genes.gff3
+
+# Prepare bowtie2 commands
+JOB_NAME="BT2_map_Lcul12"
+GENOME_PATH=$HOME/scratch/data/$GENOME/$GENOME
+mkdir $JOB_NAME && cd $JOB_NAME
+DATE=`date +%d_%m_%Y`
+
+# Build fasta index for genome 
+printf "bowtie2-build --threads 12 %s.fasta %s\nsamtools faidx %s.fasta\n" $GENOME_PATH $GENOME_PATH $GENOME_PATH  | qsub -V -q qweek_s -l select=1:ncpus=12:mem=8GB,walltime=10:00:00 -m be -M i.bar@griffith.edu.au -N Lcul12_build # 4763285.pbsserver
+# Create the mapping commands
+tail -n +2  $HOME/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/Lentil_GBS_read_info.txt | grep -v "NegControl" | gawk -v BTIDX=$GENOME_PATH -v job=$JOB_NAME '{printf "bowtie2 --end-to-end --very-sensitive -p 12 -x %s -U %s --no-unal | samblaster | picard AddOrReplaceReadGroups I=/dev/stdin O=%s_%s.dedup.rg.sorted.bam SM=%s ID=%s LB=%s_%s PL=Illumina PU=CB5HGANXX CN=AGRF PM=HiSeq2500 CREATE_INDEX=true SO=coordinate\n", BTIDX, $3, $1, job, $1, NR, $1, NR}' > ${JOB_NAME}_${DATE}.cmds
+
+# Prepare PBS script
+echo '#!/bin/bash 
+#PBS -V
+#PBS -l select=1:ncpus=12:mem=8GB,walltime=10:00:00
+#PBS -m be
+#PBS -M i.bar@griffith.edu.au
+#PBS -N BT2_map
+cd BT 
+cd $PBS_O_WORKDIR
+gawk -v ARRAY_IND=$PBS_ARRAY_INDEX "NR==ARRAY_IND" $CMDS_FILE | bash' > ${JOB_NAME}_${DATE}.pbs
+
+# submit the jobs to the scheduler
+JOBS_NUM=`wc -l ${JOB_NAME}_${DATE}.cmds | gawk '{print $1}'`
+qsub -J1-${JOBS_NUM} -v CMDS_FILE=${JOB_NAME}_${DATE}.cmds ${JOB_NAME}_${DATE}.pbs 
+# Job ID 4984009[]
+```
+
+
+Variants were called from the mapped alignments using the `ref_map.pl` command in `r fontFmt("Stacks2")` (v2.0b).   
+
+```{bash ref_stacks2}
+# create a folder for the analysis
+mkdir ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/ref_stacks2
+cd !$
+# Link the bam files into the folder
+ln -s ../$JOB_NAME/ILL*.bam ./
+ln -s ../$JOB_NAME/C*.bam ./
+
+# rename the files
+my_rename -v 's/-I[0-9]+_Lcul12.dedup.rg.sorted//' *.bam
+
+# merge parents bams (optionally combine the read files)
+# ILL6002
+INPUT_BAMS=`ls -1 ILL6002*RF* | gawk '{printf " I=%s", $1}'` 
+picard MergeSamFiles $INPUT_BAMS O=ILL6002_RF.bam USE_THREADING=true
+#ILL7537
+INPUT_BAMS=`ls -1 ILL7537*RF* | gawk '{printf " I=%s", $1}'` 
+picard MergeSamFiles $INPUT_BAMS O=ILL7537_RF.bam USE_THREADING=true
+
+# remove symlinks of parent individual files
+ rm ILL*_00?_RF.bam *_RL.bam
+
+# create the run variables
+INPUT_BAMS=`ls -1 *.bam | gawk '{printf " -B %s", $1}'` 
+BATCH=1
+DATE=`date +%d_%m_%Y`
+RUN="stacks2_ref_map"
+STACKS_BIN="$HOME/etc/tools/SNP/stacks-2.0/bin"
+# Create popmap
+ls -1 *.bam | gawk '{sample=gensub(".bam", "", "1", $1); n=split($1, pop, "_"); printf "%s\t%s\n", sample, "RIL5"}' > lentil_GBS_popmap.txt
+
+# run stacks2 ref map 
+echo "cd \$PBS_O_WORKDIR; mkdir -p ./${RUN}_$DATE/populations.r50; $HOME/etc/tools/SNP/stacks-2.0/bin/ref_map.pl -I ./ -M lentil_GBS_popmap.txt -O ./${RUN}_$DATE/ -t 12 -X \"populations: --vcf --genepop\" && $HOME/etc/tools/SNP/stacks-2.0/bin/populations -t 12 -P ./${RUN}_$DATE/ -O ./${RUN}_$DATE/populations.r50 -r 0.50 --vcf --genepop" | qsub -V -l select=1:ncpus=12:mem=16GB,walltime=50:00:00 -m be -M i.bar@griffith.edu.au -N ${RUN:0:11}  # 4995271.pbsserver
+
+# run population (if gstacks was run separately from ref_map pipeline)
+# echo "cd \$PBS_O_WORKDIR; $HOME/etc/tools/SNP/stacks-2.0/bin/populations -t 12 -P ./${RUN}_$DATE/ -O ./${RUN}_$DATE/populations.r80 -r 0.80 --vcf --genepop" | qsub -V -l select=1:ncpus=12:mem=16GB,walltime=5:00:00 -m be -M i.bar@griffith.edu.au -N refmap2_pop -q qweek_s
+# 4995270.pbsserver
+
+# echo "cd \$PBS_O_WORKDIR; $STACKS_BIN/gstacks $INPUT_BAMS -O ./${RUN}_$DATE/ -t 12" | qsub -V -l select=1:ncpus=12:mem=12GB,walltime=20:00:00 -m be -M i.bar@griffith.edu.au -N gstacks2 -q qweek_s # 4831581.pbsserver
+
+```
+
+
+### Variant Filtering
+Variants were first screened to clear calls with low Genotyping Quality ($GQ<20$) and too low or too high Depth coverage ($DP<5$ || $DP>200$). The remaining variant calls at each locus were counted and loci were filtered to include only SNP sites that with valid calls in at least 50% of the samples (NS $\ge$ 73). Filtration was performed using `r fontFmt("SnpSift", custom_font)` v4.3.1p [@ruden_using_2012; @cingolani_program_2012]. 
+
+```{bash vcf_filtering}
+# install SnpSift and SnpEff
+conda install -c bioconda snpsift snpeff vcftools
+# Create an alias to call SnpSift.jar (this example is on windows, under git bash)
+alias SnpSift='java -jar /c/Unix_tools/snpEff/SnpSift.jar'
+# extract the vcf file and select only SNP sites 
+cd ${RUN}_$DATE  # stacks2_population_16_05_2018, denovo_stacks2_29_05_2018
+pigz -cd gstacks.vcf.gz | gawk '$1 ~ /^#/ || ($4 ~ /[ACGT]/ && $5 ~ /[ACGT]/)' > gstacks.snps.vcf
+# Extract Chromosome location for each tag
+pigz -cd gstacks.fa.gz | grep ">" | gawk -vOFS="\t" 'BEGIN{print "LOC","CHROM","POS", "STRAND"}; {sub(">", "", $1); match($2, /pos=(LcChr[0-9]):([0-9]+):([-+])/, arr); print $1,arr[1],arr[2],arr[3]}' > tag_chrom.map
+
+# Recode genotypes as missing if below a certain threshold, such as genotyping quality or depth (GQ:DP) 
+SnpSift filter 'AF>0.2' gstacks.snps.vcf | SnpSift gtfilter -gv './.' 'GQ<20 || DP<5 || DP>200'   > gstacks_GQ_DP_corr_AF.vcf
+
+# Further filtering was done in R - Jump to vcf_filtration_R
+ 
+```
+
+Additional processing of the variants was performed in R v`r paste(R.version$major, R.version$minor, sep=".")` [@R_2017], keeping only bi-allelic SNP polymorphoic between the parents genotypes and filtering out markers and samples with less than 90% valid genotype calls. Finally, correct chromosome position information was assigned for each locus based on the genomic coordinates. 
+
+```{r vcf_filtration_R}
+install.deps("tidyverse")
+options(stringsAsFactors=FALSE)
+# Load vcf file
+stacks_dir <- "../Analysis/ref_stacks/stacks2_population_04_12_2017"
+vcf_file <- "gstacks_GQ_DP_corr_AF.clean.sorted.vcf"  #  gstacks_no_RL_NS_GQ_DP_filtered.vcf
+vcf_data <- read_tsv(file.path(stacks_dir, vcf_file), comment = "##") #%>% 
+  # mutate(`#CHROM`=as.numeric(unlist(strsplit(`#CHROM`, split="_"))[2]))  # n_max=100
+sample_cols <- colnames(vcf_data)[10:ncol(vcf_data)]
+# Relace missing genotypes and heterozygotes with ./.
+vcf_data <- vcf_data %>% mutate_at(vars(one_of(sample_cols)), 
+       .funs = funs(if_else(grepl("^1/0", .) | grepl("^0/1", .) | grepl("^\\.$", .), "./.", .)))
+# exclude markers
+miss_rate = 0.1
+exclude_markers <- apply(vcf_data[sample_cols], 1, 
+                         function(m) sum(grepl("^\\./\\.", m) | grepl("^\\.$", m))>miss_rate*length(sample_cols))
+
+table(exclude_markers)
+vcf_data <- vcf_data %>% filter(!exclude_markers)
+# Select only polymorphic markers ()
+ploy_alpha <- 0.05
+poly_markers <- apply(vcf_data[sample_cols], 1, function(g) {
+  # g <- vcf_data[1, sample_cols]
+  genotypes <- sub(":.+", "", g)
+  p_table <- prop.table(table(genotypes))
+  g_table <- p_table[!grepl("\\./\\.", names(p_table))]
+  if (length(g_table)==2) {
+    res <- g_table[1]>=ploy_alpha && g_table[2]>=ploy_alpha
+  }  else res <- FALSE
+  return(res)
+})
+
+table(poly_markers)
+
+vcf_data <- vcf_data %>% filter(poly_markers)
+
+# remove samples with missing data
+
+call_rate = 1 - miss_rate #   0.65
+excl_samples <- sample_cols[apply(vcf_data[sample_cols], 2, 
+                function(g) sum(!grepl("\\./\\.", g))<call_rate*nrow(vcf_data))]
+excl_samples <- c(excl_samples, sample_cols[grepl("RL", sample_cols)])
+
+# Now repeat marker exclusion without the problematic genotypes
+incl_samples <- sample_cols[!sample_cols %in% excl_samples]
+# miss_rate = 0.2
+exclude_markers_updated <- apply(vcf_data[incl_samples], 1, 
+                         function(m) sum(grepl("\\./\\.", m))>miss_rate*length(incl_samples))
+table(exclude_markers_updated)
+# Remove missing genotypes and markers, update marker information (CHROM, POS, LOC)
+clean_vcf <- vcf_data[!exclude_markers_updated,] %>% dplyr::select(-one_of(excl_samples)) %>%
+  mutate(ID=paste(ID, POS, sep= "_"))
+
+# Load marker map (extracted from gstacks.fa)
+marker_map <- read_tsv(file.path(stacks_dir,"tag_chrom.map")) %>% 
+  dplyr::rename(CHROM_POS=POS) 
+  # left_join(marker_map, c("#CHROM" = "LOC")) %>% 
+  # mutate(ID=paste0("tag",`#CHROM`, POS, sep="_"), `#CHROM` = CHROM, 
+  #        POS=ifelse(STRAND=="+", CHROM_POS+POS, CHROM_POS-POS)) %>% 
+  # dplyr::select(-one_of(colnames(marker_map)))
+
+# Write back vcf
+clean_vcf_file <- filedate(sprintf("gstacks_GQ_DP_corr_AF_BiPol_miss%d",miss_rate*100), ".clean.vcf","data")
+# Copy the header into a new file
+system2("grep", args=c("'^##'", file.path(stacks_dir, vcf_file)), stdout = clean_vcf_file)
+if (file.exists(clean_vcf_file)) write_tsv(clean_vcf, clean_vcf_file, append = TRUE, col_names = TRUE)
+
+```
+
+
+### Linkage mapping
+#### OneMap
+The clean, filtered VCF file was imported to R and linkage map was constructed using the "Kosambi" method [@KosambiD.D.estimationmapdistances2012], implemented in `r fontFmt("OneMap", custom_font)` v`r packageVersion("onemap")` [@margarido_onemap:_2007] package, while removing any SNPs deviating from a 1:1 segregation pattern. The linkage map was then manually evaluated to assess its concordance with the genomic coordinates (>96% of the positions match at the chromosome level).
+
+
+### QTL Analysis
+QTL analysis was performed in R, using the `r fontFmt("R/qtl2", custom_font)` v`r packageVersion("qtl2")` package [@Broman_2018], an improved modern implementation of the original `r fontFmt("R/qtl", custom_font)` [@broman_r/qtl:_2003]. 
+
+#### Preparation of data
+To import genotype, phenotype and linkage map data to `r fontFmt("R/qtl", custom_font)`, 3 files were prepared:   
+
+1. Genotype file
+2. Phenotype file
+3. Genetic map file
+
+The first two files were specified as separate `.csv` files, while the latter was exported from `r fontFmt("OneMap", custom_font)`. For analysis in `r fontFmt("R/qtl2", custom_font)`, YAML files (`.yml`) were prepared specifying the location of the genotype, phenotype and map files for each time point.  
+A custom script was used to combine the information from all three data files into one `.csv` file for analysis in `r fontFmt("WinQTLCartographer", custom_font)`.
+<!-- A combined quantitative score was developed, incorporating the 4 quantitative traits, along with the qualitative assessment, giving different weight for each measure, to provide a consistent metric of the overall disease score. -->
+
+#### QTL genome scan
+A genome scan approach was chosen to identify significant QTL regions, using a linear mixed model accounting for relationships among individuals using a random polygenic effect, supported by a permutation test (n=1000) to determine LOD threshold for significance for each trait at each time point. 
+
+Loci and QTL positions across the linkage map were prepared in R and exported for plotting in `r fontFmt("MapChart", custom_font)` v2.32 [@voorrips_mapchart:_2002].
+
+In addition, the constructed genetic map and genotype-phenotype data were exported for analysis in `r fontFmt("Windows QTL Cartographer", custom_font)` v2.5_011 [@shengchu_wang_windows_2012], using a CIM approach and determine the contribution of each QTL to the phenotype variability. 
+
+#### SNP annotation 
+Physical (chromosomal) locations of the QTL peaks were determined and SNPs and genes were extracted from a range of 2Mbp up and downstream of these locations. Functional annotation determined the effect of each SNP on the underlying genes.  
+Gene models were predicted from the _L. culinaris_ genome and transcriptome using `r fontFmt("Seqping", custom_font)` v0.1.45.1 [@chan_seqping:_2017], which requires the following dependencies:
+
+`r fontFmt("Seqping", custom_font)` is a gene model pipeline. In other words it links together many steps and programs to produce final model. For this reason, you must first install a number of programs that `r fontFmt("Seqping", custom_font)` depends on:  
+a. [BLAST 2.2.25](ftp://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/)  
+b. [CD-HIT 4.5.4](http://www.bioinformatics.org/downloads/index.php/cd-hit/)  
+c. [Exonerate 2.2](http://www.ebi.ac.uk/~guy/exonerate/)  
+d. [GlimmerHMM 3.0](ftp://ccb.jhu.edu/pub/software/glimmerhmm/)  
+e. [AUGUSTUS 2.6.1](http://bioinf.uni-greifswald.de/augustus/binaries/) ([BUSCO](http://busco.ezlab.org/) might be an easier alternative)  
+f. [SNAP-2012-05-17](http://korflab.ucdavis.edu/Software/)  
+g. [MAKER 2.28](http://www.yandell-lab.org/software/maker.html)  
+h. [EMBOSS 6.4.0](http://emboss.sourceforge.net/download/)  
+i. [HMMER 3](http://hmmer.janelia.org/software)  
+j. [RepeatMasker-3-3-0](http://www.repeatmasker.org/RMDownload.html)  
+k. [NCBI splign 2.0.8](ftp://ftp.ncbi.nlm.nih.gov/genomes/TOOLS/splign/linux-i64/splign.tar.gz) (includes binaries for `r fontFmt("compart", custom_font)`)  
+l. [scipio 1.4**](http://www.webscipio.org/webscipio/download_scipio_1_4)    
+m. [Seqping](https://sourceforge.net/projects/seqping/files/current/)  
+n. [pblat](http://icebert.github.io/pblat/) and [pblast-cluster](http://icebert.github.io/pblat-cluster/)  
+<!-- [NCBI C++ Toolkit](ftp://ftp.ncbi.nih.gov/toolbox/ncbi_tools++/) -->
+* Edit Perl tools to use the right version (use the miniconda version)  
+** `r fontFmt("Scipio", custom_font)` uses `r fontFmt("Blat", custom_font)` to identify genes, however, `r fontFmt("Blat", custom_font)` is single-threaded and extremely slow. Download [pblat](http://icebert.github.io/pblat/) and edit `r fontFmt("scipio.pl", custom_font)` to use it instead.  
+*** A good genome annotation guide is available in [this link](https://gist.github.com/darencard/bb1001ac1532dd4225b030cf0cd61ce2), worth considering using it to improve `r fontFmt("Seqping", custom_font)`
+
+
+
+In addition, a few reference databases are needed:  
+1. Lentil transcriptome - [L. culinaris CSFL RefTrans V2](https://www.coolseasonfoodlegume.org/analysis/150)  
+2. Fabaceae full length protein sequences in FASTA format from [NCBI](https://www.ncbi.nlm.nih.gov/protein/?term=%22Fabaceae%22%5Bporgn%3A__txid3803%5D++NOT+uncharacterized+NOT+partial+NOT+mitochondrial+NOT+hypothetical+NOT+ribosomal+NOT+chloroplast) (using the following search string `"Fabaceae"[porgn:__txid3803] NOT uncharacterized NOT partial NOT mitochondrial NOT hypothetical NOT ribosomal NOT chloroplast`)  
+3. Repeat elements sequences in FASTA format - [RepBase](http://www.girinst.org/server/RepBase/protected/RepBase23.02.fasta.tar.gz) (Username: IdoBar Password: 6pjya8) and the [MIPS Repeat Element Database](ftp://ftpmips.helmholtz-muenchen.de/plants/REdat/). The 2 databases were filtered to include only plant species and combined.    
+4. Repeat elements sequences in HMM format - [Dfam.hmm](http://dfam.org/web_download/Current_Release/Dfam.hmm.gz)  
+
+
+```{bash gene_prediction}
+# create a new environment and install needed tools
+pyenv install miniconda2-latest
+pyenv shell miniconda2-latest
+conda install -c bioconda snap busco maker emboss genometools-genometools blat cd-hit blast repeatmodeler hmmer -c biocore blast-legacy # blast-plus, use boost version of augustus (augustus-3.2.3-boost1.57_0)
+conda install -c biocore blast-plus
+# Download and extract splign, scipio (http://www.webscipio.org/webscipio/download_scipio), glimmerhmm
+cd ~/etc/tools/Alignment
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/TOOLS/splign/linux-i64/splign.tar.gz
+
+# download and extract Seqping
+# edit seqping.sh with the tools folders' locations
+# edit 
+# Predict repeat elements from Lens culinaris genome using RepeatModeler 
+# see (https://gist.github.com/darencard/9a03d9a141c4fe5c77f909c47a455169) for faster implementation
+echo "cd \$PBS_O_WORKDIR; export PYENV_VERSION=miniconda2-latest; BuildDatabase -name Lens_culinaris -engine ncbi $HOME/data/Lens_culinaris_v1.0/Lens_culinaris_v1.0.fasta; unset PYENV_VERSION" | \
+qsub -V -l select=1:ncpus=12:mem=12GB,walltime=00:20:00 -m be -M i.bar@griffith.edu.au -N repeatdb 
+echo "cd \$PBS_O_WORKDIR; export PYENV_VERSION=miniconda2-latest; RepeatModeler -pa 12 -engine ncbi -database Lens_culinaris; unset PYENV_VERSION" | \
+qsub -V -l select=1:ncpus=12:mem=12GB,walltime=120:00:00 -q qweek_s -m be -M i.bar@griffith.edu.au -N repeatmodel # 4925272.pbsserver
+
+# combine and cluster Plant repeat elements
+cd $HOME/scratch/data/Lens_culinaris_v1.0/RepBase23.02.fasta
+cat athrep.ref oryrep.ref dcotrep.ref mcotrep.ref grasrep.ref plnrep.ref > ../RepBase23_Plant_rep.fasta
+cat RepBase23_Plant_rep.fasta mipsREdat_9.3p_Eudicot_TEs.fasta > Plant_rep.fasta
+usearch -cluster_fast Plant_rep.fasta -id 0.95 -sort length -centroids Plant_rep_0.95.fasta
+
+# Manually download and install RepeatMasker and needed perl libraries
+# edit RepeatMasker file
+sed -i.bak    /export/home/s2978925/.pyenv/versions/miniconda2-latest/bin/RepeatMasker
+
+# run Seqping
+echo "cd \$PBS_O_WORKDIR; export PYENV_VERSION=miniconda2-latest; ~/etc/tools/Annotation/Seqping/seqping.sh -t ../l.culinaris_csfl_reftransV2.fasta -g ../Lens_culinaris_v1.0.fasta -r ../Fabaceae_proteins_0.95.fasta -f ../mipsREdat_9.3p_Eudicot_TEs.fasta -m ../Dfam.hmm -o Seqping_output -c 5 -p 12 -s -l Gene_prediction_Seqping_C5.log 1>model.out 2>model.err" | qsub -V -l select=1:ncpus=12:mem=12GB,walltime=120:00:00 -q qweek_s -m be -M i.bar@griffith.edu.au -N seqping # 4960236.pbsserver
+
+
+
+
+
+```
+
+
+#### Resources
+* [VCF-tricks](https://github.com/IARCbioinfo/VCF-tricks)
+* [VCF-downgrade](https://gist.github.com/danielecook/f1d80babd7d601a74981#file-vcf_downgrade-sh)
+* [Vcf2Mapmaker](https://github.com/aubombarely/GenoToolBox/blob/master/SNPTools/Vcf2Mapmaker)
+
+
+<!-- ### Alternative methods (not working/not used) -->
+
+<!-- Running `r fontFmt("Stacks")` in `genetic map` mode -->
+<!-- ```{bash ref_stacks} -->
+<!-- # create a folder for the analysis -->
+<!-- mkdir ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/ref_stacks -->
+<!-- cd !$ -->
+<!-- # Link the bam files into the folder -->
+<!-- ln -s ../BT2_map_Lcul10/ILL*.bam ./ -->
+<!-- ln -s ../BT2_map_Lcul10/C*.bam ./ -->
+
+<!-- # rename the files -->
+<!-- my_rename -v 's/-I[0-9]+_Lcul10.dedup.rg.sorted//' *.bam -->
+
+<!-- # merge parents bams (optionally combine the read files) -->
+<!-- # ILL6002 -->
+<!-- INPUT_BAMS=`ls -1 ILL6002*RF* | gawk '{printf " I=%s", $1}'`  -->
+<!-- picard MergeSamFiles $INPUT_BAMS O=ILL6002_RF_I5.bam USE_THREADING=true -->
+<!-- #ILL7537 -->
+<!-- INPUT_BAMS=`ls -1 ILL7537*RF* | gawk '{printf " I=%s", $1}'`  -->
+<!-- picard MergeSamFiles $INPUT_BAMS O=ILL7537_RF_I5.bam USE_THREADING=true -->
+
+<!-- # create the PARENTS and PROGENY variables -->
+<!-- PARENTS=`ls -1 ILL*_RF_I5.bam | gawk '{printf "-p %s ",$1}'` -->
+<!-- PROGENY=`ls -1 C*.bam | gawk '{printf "-r %s ",$1}'` -->
+<!-- DATE=`date +%d_%m_%Y` -->
+<!-- mkdir stacks_output_$DATE -->
+<!-- # run stacks -->
+<!-- echo "cd \$PBS_O_WORKDIR; ref_map.pl -m 5 -X \"genotypes:-r 3\" -b 1 -S -o ./stacks_output_$DATE/ -A GEN -T 12  $PARENTS $PROGENY" | qsub -V -l select=1:ncpus=12:mem=96GB,walltime=20:00:00 -m be -M i.bar@griffith.edu.au -N stacks # 4768145.pbsserver -->
+
+<!-- # get coverage information -->
+<!-- grep -E "[0-9]+x$" stacks_output_$DATE/ref_map.log > ref_map.coverage -->
+<!-- # Perform correction based on population -->
+<!-- mkdir cor_stacks_output_$DATE -->
+<!-- echo "cd \$PBS_O_WORKDIR; rxstacks -b 1 -P ./stacks_output_$DATE/ -o .q/cor_stacks_output_$DATE/  --conf_lim 0.25 --prune_haplo  --lnl_lim -8.0 --lnl_dist -t 12 --verbose" | qsub -V -l select=1:ncpus=12:mem=96GB,walltime=20:00:00 -m be -M i.bar@griffith.edu.au -N rxstacks # 4768149.pbsserver -->
+
+<!-- # Rerun the commands for the corrected files -->
+<!-- CSTACKS_CMD=`grep "bin/cstacks" stacks_output_11_10_2017/ref_map.log | sed 's|stacks_output_|cor_stacks_output_|g'` -->
+<!-- echo "cd \$PBS_O_WORKDIR; $CSTACKS_CMD" | qsub -V -l select=1:ncpus=12:mem=96GB,walltime=20:00:00 -m be -M i.bar@griffith.edu.au -N cor_cstacks -->
+
+<!-- SSTACKS_CMD=`grep "bin/sstacks" stacks_output_11_10_2017/ref_map.log | sed 's|stacks_output_|cor_stacks_output_|g'` -->
+<!-- echo "cd \$PBS_O_WORKDIR; $SSTACKS_CMD"| qsub -V -l select=1:ncpus=12:mem=96GB,walltime=20:00:00 -m be -M i.bar@griffith.edu.au -N cor_sstacks -->
+
+<!-- GENOTYPE_CMD=`grep "bin/genotypes" stacks_output_10_10_2017/ref_map.log | sed 's|stacks_output_|cor_stacks_output_|g'` -->
+<!-- echo "cd \$PBS_O_WORKDIR; $GENOTYPE_CMD" | qsub -V -l select=1:ncpus=12:mem=96GB,walltime=20:00:00 -m be -M i.bar@griffith.edu.au -N cor_genotypes -->
+
+<!-- # Produce output files for OneMap and R/QTL -->
+<!-- genotypes -b 1 -P ./cor_stacks_output_$DATE/ -t F2 -c -o onemap -->
+<!-- genotypes -b 1 -P ./cor_stacks_output_$DATE/ -t F2 -c -o rqtl -->
+<!-- ``` -->
+
+
+<!-- #### denovo map pipeline -->
+<!-- Running `r fontFmt("Stacks")` in _denovo_ map mode:   -->
+
+<!-- ```{bash denovo_stacks} -->
+<!-- # create a folder for the analysis -->
+<!-- mkdir ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/denovo_stacks -->
+<!-- cd !$ -->
+<!-- # Link the read files into the folder -->
+<!-- ln -s ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/fastq/C*.fq.gz ./ -->
+
+<!-- # rename the files -->
+<!-- my_rename -v 's/-I[0-9]+_[GCAT]+//' *.fq.gz -->
+
+<!-- # merge parent read files -->
+<!-- # ILL6002 -->
+<!-- ls -1 ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/fastq/ILL6002*.fq.gz | xargs cat > ILL6002.fq.gz -->
+<!-- #ILL7537 -->
+<!-- ls -1 ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/fastq/ILL7537*.fq.gz | xargs cat > ILL7537.fq.gz -->
+
+<!-- # create the PARENTS and PROGENY variables -->
+<!-- BATCH=2 -->
+<!-- PARENTS=`ls -1 ILL*.fq.gz | gawk '{printf "-p %s ",$1}'` -->
+<!-- PROGENY=`ls -1 C*.fq.gz | gawk '{printf "-r %s ",$1}'` -->
+<!-- DATE=`date +%d_%m_%Y` # 01/11/2017 -->
+<!-- mkdir stacks_output_$DATE -->
+<!-- # run stacks -->
+<!-- echo "cd \$PBS_O_WORKDIR; denovo_map.pl -m 5 -b $BATCH -S -o ./stacks_output_$DATE/ -A GEN -T 12  $PARENTS $PROGENY" | qsub -V -l select=1:ncpus=12:mem=96GB,walltime=20:00:00 -m be -M i.bar@griffith.edu.au -N stacks_denovo # 4811255.pbsserver -->
+
+<!-- cd stacks_output_$DATE -->
+<!-- # get coverage information -->
+<!-- grep -E "[0-9]+x$" denovo_map.log > ../denovo_map.coverage -->
+<!-- # Perform correction based on population -->
+<!-- mkdir cor_stacks_output_$DATE -->
+<!-- echo "cd \$PBS_O_WORKDIR; rxstacks -b $BATCH -P ./ -o ./cor_stacks_output_$DATE/ --conf_lim 0.25 --prune_haplo --lnl_lim -8.0 --lnl_dist -t 12 --verbose" | qsub -V -l select=1:ncpus=12:mem=96GB,walltime=20:00:00 -m be -M i.bar@griffith.edu.au -N rxstacks # 4829463.pbsserver -->
+
+<!-- # Rerun the commands for the corrected files (just replace the input folder to the "corrected" one) -->
+<!-- RXSTACKS_CMD=`grep "bin/[csg]" denovo_map.log | sed 's|stacks_output_|cor_stacks_output_|g' | gawk -v ORS="; " '{print $0}'` -->
+<!-- echo "cd \$PBS_O_WORKDIR; $RXSTACKS_CMD" | qsub -V -l select=1:ncpus=12:mem=96GB,walltime=20:00:00 -m be -M i.bar@griffith.edu.au -N cor_stacks # 4829477.pbsserver -->
+
+<!-- # Produce output files for OneMap and R/QTL -->
+<!-- echo "cd \$PBS_O_WORKDIR;  genotypes -b $BATCH -r 10 -P ./cor_stacks_output_$DATE/ -t GEN -c -o onemap; genotypes -b $BATCH -r 10 -P ./cor_stacks_output_$DATE/ -t GEN -c -o rqtl" | qsub -V -l select=1:ncpus=12:mem=96GB,walltime=20:00:00 -m be -M i.bar@griffith.edu.au -N gen_output # 4829477.pbsserver -->
+<!-- ``` -->
+
+<!-- ### VCF Filtration in bash -->
+<!-- # Optional filtering in bash (if need to reduce the file size before R) -->
+<!-- # summarise number of missing genotypes and filter to keep only markers with maximum 50% missing calls -->
+<!-- MISS_RATE=50 -->
+<!-- NSAMPLES=$(( `head -n 100 gstacks_GQ_DP_corr_AF.vcf | grep "^#CHROM" | gawk '{print NF}'` -9 )) -->
+<!-- MAX_NA=$(( MISS_RATE*NSAMPLES/100 )) -->
+<!-- # Mark acceptable markers -->
+<!-- SnpSift gt gstacks_GQ_DP_ID_corr_AF.vcf  | gawk -vmax_na=$MAX_NA -F "\t" -vOFS="\t" 'NF>2{n=split($NF, info, ";"); sum_na=split(info[n], na, ","); if(sum_na<max_na || $1 ~ /^#CHROM/){print $1,$2,$3}}' > whitelist.markers -->
+<!-- # Mark non-acceptable markers -->
+<!-- SnpSift gt gstacks_GQ_DP_ID_corr_AF.vcf  | gawk -vmax_na=$MAX_NA -F "\t" -vOFS="\t" 'NF>2{n=split($NF, info, ";"); sum_na=split(info[n], na, ","); if(sum_na>max_na){print $1,$2,$3}}' > blacklist.markers -->
+
+<!-- # Remove blacklisted markers -->
+<!-- grep -vFf blacklist.markers gstacks_GQ_DP_ID_corr_AF.vcf > gstacks_GQ_DP_ID_corr_AF.2_NS.5.vcf -->
+<!-- # Remove parents samples from Robert Lee: -->
+<!-- # cut gstacks_GQ_DP_ID_corr_AF.2_NS.5.vcf -f 1-154,156 > gstacks_no_RL_GQ_DP_ID_corr_AF.2_NS.5.vcf -->
+
+
+<!-- ### Genotype Imputation -->
+<!-- The resulting SNPs were used as a basis for imputation to try and infer missing genotypes by assessing linkage between markers and fixed haplotypes.   -->
+<!-- Several methods were used: -->
+<!-- 1. Missing genotypes were imputed by `r fontFmt("LB-Impute", custom_font)` [@fragoso_imputing_2016]. -->
+<!-- 2. Also by `r fontFmt("radiator R", custom_font)` package v`r packageVersion("radiator")` [@gosselin_radiator:_2017], utilising a Random Forest based algorithm. -->
+<!-- 3. Imputation was performed with `r fontFmt("LinkImpute", custom_font)` [@money_linkimpute:_2015], using a KNNi algorithm, as implemented in `r fontFmt("TASSEL", custom_font)` v5.2.40 [@glaubitz_tassel-gbs:_2014].  -->
+<!-- 4. With `r fontFmt("LinkImputeR", custom_font)` v1.1.1 [@money_linkimputer:_2017], using an improved KNNi algorithm.   -->
+
+<!-- After imputation, a second filtration step selected only markers that are Homozygous in each parent and Polymorphic between the parents. -->
+
+<!-- ```{bash LB-impute} -->
+<!-- # Fix ID column and change CHROM to 1 (required for radiator and LB_Impute - fix underway) -->
+<!-- #gawk -F"\t" -vOFS="\t" '$1 !~ "^#"{$3=$1"_"$2;$1=1}{print $0}' gstacks_GQ_DP_corr_AF.vcf > gstacks_GQ_DP_ID_corr_AF.vcf -->
+
+<!-- # Try to impute the missing data (does not work since the markers are too spread across scaffolds) -->
+<!-- java -jar ~/etc/tools/SNP/LB-Impute-master/LB-Impute.jar -method impute -f gstacks_GQ_DP_corr_AF.clean.vcf -window 7 -offspringimpute -parents ILL6002_RF,ILL7537_RF -o gstacks_GQ_DP_corr_AF.clean.imputed.vcf -->
+
+
+<!-- # Filter markers with only homozygous polymorphic parents -->
+<!-- # Using gawk -->
+<!-- gawk -F "\t" '$1 ~ /^#/ || (($NF ~ /^0\/0/ && $(NF-1) ~ /^1\/1/) || ($(NF-1) ~ /^0\/0/ && $NF ~ /^1\/1/))' gstacks_GQ_DP_corr_AF.clean.imputed.vcf > gstacks_GQ_DP_corr_AF_Hom_Pol.clean.imputed.vcf -->
+
+<!-- # summarise number of missing genotypes and filter to keep only markers with maximum 50% missing calls -->
+<!-- MISS_RATE=50 -->
+<!-- NSAMPLES=$(( `head -n 100 gstacks_no_RL_GQ_DP_recoded.vcf | grep "^#CHROM" | gawk '{print NF}'` -9 )) -->
+<!-- MAX_NA=$(( MISS_RATE*NSAMPLES/100 )) -->
+<!-- SnpSift gt gstacks_no_RL_GQ_DP_recoded.vcf  | gawk -vmax_na=$MAX_NA -F "\t" '{n=split($NF, info, ";"); sum_na=split(info[n], na, ","); if(sum_na<max_na){print $0}}'  | \ -->
+<!-- SnpSift gt -u > gstacks_no_RL_NS_GQ_DP_filtered.vcf -->
+<!-- # Save VCF info into an empty file (we'll fill in this file after further filtration in R): -->
+<!-- grep "^##" gstacks_no_RL_NS_GQ_DP_filtered.vcf > gstacks_no_RL_NS_GQ_DP_filtered.clean.vcf -->
+
+
+<!-- # number of resulting SNPs:  -->
+<!-- grep -v "^##" gstacks_no_RL_NS_GQ_DP_filtered.vcf | wc -l # 13832 (with GQ and DP filtration, NS>100) -->
+
+<!-- ``` -->
+
+<!-- ```{bash BP-impute} -->
+<!-- # Not working -->
+<!-- C:\Program Files\R\R-3.4.0\bin\Rscript.exe bpimpute_v33.R	gstacks_GQ_DP_corr_AF.clean.sorted.vcf10	 -->
+<!-- ILL7537_RF ILL6002_RF 0.1	trim nohet;	 -->
+<!-- ``` -->
+
+<!-- ```{bash vcf_linkimputer} -->
+<!-- # Genotype imputation with LinkImputeR -->
+<!-- alias LinkImputeR='java -jar /c/Bioinformatics/Tools/linkimputer/LinkImputeR.jar' -->
+<!-- # edit `accuracy.ini` and modify input file name and other parameters: -->
+<!-- [InputFilters] -->
+<!-- maf=0.01 -->
+<!-- positionmissing = 0.8 -->
+<!-- hw=0.01 -->
+
+<!-- [Global] -->
+<!-- depth = 5 -->
+
+<!-- [CaseFilters] -->
+<!-- missing = 0.2,0.4,0.6,0.8 -->
+<!-- maf=0.01,0.05,0.1,0.15,0.2 -->
+<!-- # Create a folder for the statistics -->
+<!-- mkdir Linkimputer_stats -->
+<!-- # Run LinkImputeR to assess accuracy (seem not to be working on Windows) -->
+<!-- LinkImputeR -s accuracy.ini -->
+<!-- # Impute genotypes -->
+<!-- LinkImputeR Linkimpute2.xml 'Case 4' gstacks_case4.imputed.vcf # Miss=0.8, MAF=0.01, Samples=136, Markers=13831 -->
+<!-- LinkImputeR Linkimpute2.xml 'Case 18' gstacks_case18.imputed.vcf # Miss=0.4, MAF=0.2, Samples=130, Markers=11422 -->
+
+<!-- # Fix error in field annotation -->
+<!-- sed -i.bak 's/ID=UG/ID=OG/g' gstacks_case18.imputed.vcf -->
+<!-- sed -i.bak 's/ID=UG/ID=OG/g' gstacks_case4.imputed.vcf -->
+<!-- # Filter markers with only homozygous polymorphic parents -->
+<!-- # Using SnpSift (faster, more lines, doesn't filter well) -->
+<!-- #cat gstacks_case4.imputed.vcf | SnpSift filter "(isHom( GEN[135] ) && isHom( GEN[136] ) && GEN[135]!=GEN[136] )" > gstacks_case4_Hom_Pol.imputed.vcf -->
+<!-- # Using gawk -->
+<!-- gawk -F "\t" '$1 ~ /^#/ || (($NF ~ /^0\/0/ && $(NF-1) ~ /^1\/1/) || ($(NF-1) ~ /^0\/0/ && $NF ~ /^1\/1/))' gstacks_case4.imputed.vcf > gstacks_case4_Hom_Pol.imputed.vcf -->
+<!-- ``` -->
+
+<!-- The imputation seem to have altered the allele frequencies and introduced a significant segregation distortion which hampers linkage mapping and therefore the imputation results were not considered in subsequent analysis. -->
+
+
+<!-- The `.vcf` output file from `gstacks` command was then recoded to `r fontFmt("MapMaker", custom_font)` data file [@lander_mapmaker:_1987], while keeping only bi-allelic SNP, segregating in a 1:1 ratio and removing any non-polymorphic sites, using [Vcf2Mapmaker](https://github.com/aubombarely/GenoToolBox/blob/master/SNPTools/Vcf2Mapmaker).  -->
+
+<!-- ```{bash vcf2mapmaker} -->
+
+<!-- # Convert to MapMaker format -->
+<!-- # Fix missing genotypes (change ./. to .) -->
+<!-- sed -i.bak -r "s|(\s./.)\S+|\1|g; s|\./\.|.|g" gstacks_GQ_DP_corr_AF_Hom_miss40.clean.vcf -->
+<!-- # Install missing module -->
+<!-- cpanm Statistics::Distributions -->
+<!-- Vcf2Mapmaker.pl -i gstacks_GQ_DP_corr_AF_Hom_miss40.clean.vcf -o gstacks_GQ_DP_corr_AF_Hom_miss40_BiPol.raw -a ILL6002_RF -b ILL7537_RF -t "ri self" -s '(a,b)' -p 0.0001 -B -->
+<!-- ``` -->
+
+
+<!-- #### ASMap -->
+<!-- Alternatively, the `.vcf` output file was recoded to `r fontFmt("MSTmap", custom_font)` format, according to the [specifications](http://www.mstmap.org/): -->
+
+<!-- * It must have markers in rows and genotypes in columns -->
+<!-- * Marker names are required to be in the rownames component of the object -->
+<!-- * Genotype names residing in the names (`colnames()`)  -->
+
+<!-- > Before constructing a linkage map it is prudent to go through a pre-construction checklist to ensure that the best quality genotypes/markers are being used to construct the linkage map. A non-exhaustive ordered checklist for an unconstructed marker set could be: -->
+
+<!-- * Check missing allele scores across markers for each genotype as well as across genotypes for each marker.  Markers or genotypes with a high proportion of missing information could be problematic. -->
+<!-- * Check for genetic clones or individuals that have a high proportion of matching allelic information between them. -->
+<!-- * Check markers for excessive segregation distortion.  Highly distorted markers may not map to unique locations. -->
+<!-- * Check  markers  for  switched  alleles.   These  markers  will  not  cluster  or  link  well  with other  markers  during  the  construction  process  and  it  is  therefore  preferred  to  repair their alignment before proceeding. -->
+<!-- * Check for co-locating markers. For large linkage maps it would be more computationally efficient from a construction standpoint to temporarily omit markers that are co-located with other markers. -->
+
+<!-- The recoded file was and imported to R and analysed using `r fontFmt("ASMap", custom_font)` [documentation](https://arxiv.org/pdf/1705.06916.pdf). -->
+
+<!-- ### Heap pipeline (currently not working) -->
+<!-- Additional mapping was performed using `r fontFmt("BWA", custom_font)` v0.7.15-r1140 [@li_fast_2009], to enable SNP calling with `r fontFmt("Heap", custom_font)` v0.8 [@kobayashi_heap:_2017]. -->
+
+<!-- ```{bash map_reads_bwa} -->
+<!-- # Use prepared sample metadata file -->
+<!-- cd $HOME/data/Papaya/AGRF_CAGRF14514_CB5HGANXX_gbs/F2population -->
+
+<!-- # Prepare bowtie2 commands -->
+<!-- JOB_NAME="BWA_map_Cpap113" -->
+<!-- GENOME="$HOME/data/Papaya/Cpapaya_113" -->
+<!-- mkdir $JOB_NAME && cd $JOB_NAME -->
+<!-- DATE=`date +%d_%m_%Y` -->
+
+<!-- # Build fasta index for genome (not needed since already done for the WGS mapping) -->
+<!-- printf "bwa index %s.fa\n" $GENOME | qsub -V -q qweek_s -l select=1:ncpus=12:mem=4GB,walltime=10:00:00 -m be -M i.bar@griffith.edu.au -N Cpap_BWA # 4749522.pbsserver -->
+<!-- # Create the mapping commands -->
+<!-- tail -n +2  $HOME/data/Papaya/AGRF_CAGRF14514_CB5HGANXX_gbs/F2population/GBS_read_info.txt | gawk -v BTIDX=$GENOME -v date=$DATE '{printf "bwa mem -t 12 -M %s.fa %s -R \"@RG\\tSM:%s\\tID:%s\\tLB:%s_%s\\tPL:Illumina\\tPU:CB5HGANXX\\tCN:AGRF\\tPM:HiSeq2500\" | picard SortSam I=/dev/stdin O=%s_Cpap113_BWA.rg.sorted.bam  VALIDATION_STRINGENCY=LENIENT CREATE_INDEX=true SO=coordinate\n", BTIDX, $3, $1, NR, $1, NR, $1}' > ${JOB_NAME}_${DATE}.cmds -->
+
+<!-- # Prepare PBS script -->
+<!-- echo '#!/bin/bash  -->
+<!-- #PBS -V -->
+<!-- #PBS -q qweek_s -->
+<!-- #PBS -l select=1:ncpus=12:mem=8GB,walltime=20:00:00 -->
+<!-- #PBS -m be -->
+<!-- #PBS -M i.bar@griffith.edu.au -->
+<!-- #PBS -N BWA_Cpap113 -->
+
+<!-- module load glibc/2.14.1 -->
+<!-- cd $PBS_O_WORKDIR -->
+<!-- # JOB_NAME="BWA_map_Cpap113" -->
+<!-- CMDS_FILE=`ls -1 ${JOB_NAME}*.cmds` -->
+<!-- gawk -v ARRAY_IND=$PBS_ARRAY_INDEX "NR==ARRAY_IND" $CMDS_FILE | bash' > ${JOB_NAME}_${DATE}.pbs -->
+
+<!-- # submit the jobs to the scheduler -->
+<!-- PBS_FILE=`ls -1 ${JOB_NAME}_*.pbs` -->
+<!-- CMDS_FILE=`ls -1 ${JOB_NAME}*.cmds` -->
+<!-- JOBS_NUM=`wc -l ${CMDS_FILE} | gawk '{print $1}'` -->
+<!-- qsub -vJOB_NAME=$JOB_NAME -J1-${JOBS_NUM} $PBS_FILE -->
+<!-- # Job ID 4751367[] -->
+<!-- # For some reason it didn't work when submitted to the server, but did when 'bashed' it -->
+
+<!-- # Add BAM file location to data file  -->
+<!-- tail -n +2  $HOME/data/Papaya/AGRF_CAGRF14514_CB5HGANXX_gbs/F2population/GBS_read_info.txt | gawk -v pwd=$(pwd) '{printf "%s\t%s/%s_Cpap113_BWA.rg.sorted.bam\n", $1, pwd,$1}' -->
+<!-- # Assess mapping with Qualimap -->
+<!-- echo 'cd $PBS_O_WORKDIR; qualimap multi-bamqc -r -d bams_list.txt -outdir qualimap_report' | qsub -V -q qweek_s -l select=1:ncpus=12:mem=8GB,walltime=20:00:00 -m be -M i.bar@griffith.edu.au -N BWA_qualimap # 4759817.pbsserver -->
+<!-- ``` -->
+
+
+<!-- ```{bash heap_snps} -->
+<!-- # Install heap (might need also LD_LIBRARY_PATH="$HOME/.pyenv/versions/miniconda-latest/lib/") -->
+<!-- cd ~/etc/tools/SNP -->
+<!-- git clone https://github.com/meiji-bioinf/heap.git -->
+<!-- ./configure LDFLAGS="-L/export/home/s2978925/.pyenv/versions/miniconda-latest/lib"  CPPFLAGS="-I/export/home/s2978925/.pyenv/versions/miniconda-latest/include/"  LD_LIBRARY_PATH="/export/home/s2978925/.pyenv/versions/miniconda-latest/lib/" -->
+<!-- make LDFLAGS="-L/export/home/s2978925/.pyenv/versions/miniconda-latest/lib"  CPPFLAGS="-I/export/home/s2978925/.pyenv/versions/miniconda-latest/include/"  LD_LIBRARY_PATH="/export/home/s2978925/.pyenv/versions/miniconda-latest/lib/" -->
+
+<!-- # required exporting LD_LIBRARY_PATH to include miniconda lib - see ~/.bash_profile -->
+<!-- # But caused issues with linked libraries -->
+<!-- ``` -->
+
+***
+This document was last updated at `r Sys.time()` using R Markdown, compiled with `r R.version.string`. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. It is especially powerful at authoring documents and reports which include code and can execute code and use the results in the output. For more details on using R Markdown see <http://rmarkdown.rstudio.com> and [Rmarkdown cheatsheet](https://www.rstudio.com/wp-content/uploads/2016/03/rmarkdown-cheatsheet-2.0.pdf).
+
+### Bibliography
+
