@@ -3,8 +3,12 @@
 # Install and load required packages from GitHub
 # .fixdevtools()
 # remove.packages("onemap")
-options(unzip = "/usr/bin/unzip")
-Sys.setenv(TAR = "/bin/tar")
+# "fix" for install_github under linux and conda (https://github.com/conda-forge/r-devtools-feedstock/issues/4)
+if (.Platform$OS.type=="unix" & grepl("conda", R.home("bin"))) {
+  options(unzip = "/usr/bin/unzip")
+  Sys.setenv(TAR = "/bin/tar")
+}
+
 # pacman::p_load_gh(c("IdoBar/onemap@patch-3")) # "thierrygosselin/radiator", "augusto-garcia/onemap"
 # vignette("Inbred_Based_Populations") # OneMap tutorial
 pacman::p_load_gh("augusto-garcia/onemap") # 
