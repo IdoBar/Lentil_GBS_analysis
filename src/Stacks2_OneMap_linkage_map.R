@@ -39,22 +39,25 @@ options:
  --group <group-by>                Whether to group markers by Chromosome (chr) or by linkage group (lg) [default: chr]. 
  -h, --help                        Print this help message.'
 #  -i, --input <vcf_file>            Stacks2-derived VCF file to process.
-opts <- docopt::docopt(usage)
-vcf_file <- opts$vcf_file #  args[1]
-loci_miss_rates <- as.numeric(unlist(stringr::str_split(opts$loci, pattern = "[ ,_]+")))
-geno_rate <- as.numeric(opts$genotype_miss)
-ncpus <- as.numeric(opts$ncpus) # args[2]
-LOD <- as.numeric(opts$lod)
-RF <- as.numeric(opts$max_rf)
-map_type <- opts$map
-group_markers <- toupper(opts$group) # group_markers <- "LG"
-# print command arguments
-command_args <- unlist(opts[!grepl("^[-<]", names(opts))]) # %>% 
-LogMsg(sprintf("Starting processing vcf file (%s).\nScript initiated with the following options:\n%s", vcf_file, 
-               paste(paste(names(command_args), command_args, sep = ": "), collapse = ", ")))
-# cat(paste(paste(names(command_args), command_args, sep = ": "), collapse = ", "))
-# ncpus <- 8
-tasks_to_run <- as.numeric(opts$tasks) # length(tasks)
+if (!interactive()){
+  opts <- docopt::docopt(usage)
+  vcf_file <- opts$vcf_file #  args[1]
+  loci_miss_rates <- as.numeric(unlist(stringr::str_split(opts$loci, pattern = "[ ,_]+")))
+  geno_rate <- as.numeric(opts$genotype_miss)
+  ncpus <- as.numeric(opts$ncpus) # args[2]
+  LOD <- as.numeric(opts$lod)
+  RF <- as.numeric(opts$max_rf)
+  map_type <- opts$map
+  group_markers <- toupper(opts$group) # group_markers <- "LG"
+  # print command arguments
+  command_args <- unlist(opts[!grepl("^[-<]", names(opts))]) # %>% 
+  LogMsg(sprintf("Starting processing vcf file (%s).\nScript initiated with the following options:\n%s", vcf_file, 
+                 paste(paste(names(command_args), command_args, sep = ": "), collapse = ", ")))
+  # cat(paste(paste(names(command_args), command_args, sep = ": "), collapse = ", "))
+  # ncpus <- 8
+  tasks_to_run <- as.numeric(opts$tasks) # length(tasks)
+}
+
 # args <- commandArgs(trailingOnly = TRUE)
 completed_tasks <- 0
 # Load vcf file
@@ -359,7 +362,9 @@ temp_map <- read_delim(temp_map_file, delim = " ",
          Phys_Pos=onemap_file$POS[match(marker, markers)], marker_num=match(marker, markers)) %>% 
   write_csv(filedate(sprintf("%s_%s_linkage_map_draft", clean_vcf_basename, group_markers), 
                      ".csv", "./data/intermediate_files"))
-
+# save the environment
+save.image(filedate(sprintf("%s.%s",  clean_vcf_basename, group_markers), ".RData", 
+                    "./data/intermediate_files", dateformat = FALSE))
 
 # Manually adjust markers at edges of LGs:
 # View the LOD scores and RF of LG4
