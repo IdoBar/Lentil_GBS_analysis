@@ -23,7 +23,7 @@ pacman::p_load(char=package_list)
 # git_packs <- c("augusto-garcia/onemap")
 # install.deps(git_packs, repo = "git")
 # devtools::install_github(git_packs)
-
+options(future.globals.maxSize= 2000*1024^2)
 options(stringsAsFactors=FALSE)
 #### parse command line arguments ####
 usage <- 'usage: Lentil_GBS_Stacks2_linkage_map_unix.R [options] <vcf_file>
