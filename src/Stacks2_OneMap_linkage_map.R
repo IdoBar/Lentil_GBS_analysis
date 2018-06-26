@@ -15,8 +15,8 @@ pacman::p_load_gh("augusto-garcia/onemap") #
 # devtools::install_github('hadley/ggplot2')
 # pacman::p_load(Rhtslib)
 # Install and load needed packages
-package_list <- c("tidyverse", "qtl", "ASMap", "RColorBrewer", "Rsamtools", "doFuture", 
-                  "foreach") # "radiator", "plotly"
+package_list <- c("tidyverse", "qtl", "ASMap", "RColorBrewer", "Rsamtools", "doFuture", "vcfR",
+                  "foreach", "glue") # "radiator", "plotly"
 pacman::p_load(char=package_list)
 
 # Onemap requires R>=3.4 and Rhtslib and zlibbioc - install with conda
@@ -355,17 +355,59 @@ LogMsg(sprintf("Number of markers in each linkage group: %s",
 # match chromosome positions of markers:
 markers <- colnames(onemap_file$geno)
 map_file <- filedate(sprintf("%s.%s",  clean_vcf_basename, group_markers), ".map", 
-                     "./data/qtl2_files/", dateformat = FALSE)
+                     "./data/qtl2_files", dateformat = FALSE)
 onemap::write_map(ordered_markers_list,map_file)
 temp_map <- read_delim(map_file, delim = " ",
            col_names = c("LG", "marker", "pos")) %>%
   mutate(Phys_Chrom=onemap_file$CHROM[match(marker, markers)], 
          Phys_Pos=onemap_file$POS[match(marker, markers)], marker_num=match(marker, markers)) %>% 
   write_csv(filedate(sprintf("%s_%s_linkage_map_draft", clean_vcf_basename, group_markers), 
-                     ".csv", "./data/intermediate_files"))
+                     ".csv", "./data/intermediate_files", dateformat = FALSE))
+
+# Save genetic map as csv for R/qtl2
+stacks_name <- sub("_populations.snps.miss\\d+", "", clean_vcf_basename)
+# map_file <- list.files("./data", sprintf(".*%s.+\\.map", stacks_name), 
+#                        full.names = TRUE, recursive = TRUE)
+geno_map <- read_delim(map_file, delim = " ",
+                       col_names = c("chr", "marker", "pos")) %>% dplyr::select(marker, chr, pos)
+write_csv(geno_map, filedate(sprintf("%s_%s_gmap", stacks_name, group_markers), 
+                             ".csv", "./data/qtl2_files", dateformat = FALSE))
+# Save physical map for R/qtl2
+
+# 
+# marker_map <- read_tsv(file.path(stacks_dir, "tag_chrom.map")) %>%
+#   dplyr::rename(CHROM_POS=POS)
+phys_map <- temp_map %>% dplyr::select(marker, chr=Phys_Chrom, pos=Phys_Pos) %>% arrange(chr, pos) 
+write_csv(phys_map, filedate(sprintf("%s_%s_pmap", stacks_name, group_markers), 
+                               ".csv", "./data/qtl2_files", dateformat = FALSE))
+
+#   separate(marker, into = c("tag", "LOC", "Phys_POS"), remove=FALSE, convert=TRUE) %>% 
+#   inner_join(marker_map, .) %>% mutate(pos=Phys_POS) %>%
+#   dplyr::select(one_of(colnames(geno_map))) %>% arrange(chr, pos)
+# write_csv(phys_map, "data/qtl2_files/Lentil_GBS_pmap.csv")
+
+# Write genotype table
+genos <- as.data.frame(t(extract.gt(read.vcfR(clean_vcf_file)))) %>% 
+  rownames_to_column 
+genos %>% filter(!grepl("RF$", rowname)) %>%
+  write_csv(filedate(sprintf("%s_%s_genos", stacks_name, group_markers), 
+                     ".csv", "./data/qtl2_files", dateformat = FALSE))
+# Write founder table
+genos %>% filter(grepl("RF$", rowname)) %>%
+  write_csv(filedate(sprintf("%s_%s_founder_genos", stacks_name, group_markers), 
+                     ".csv", "./data/qtl2_files", dateformat = FALSE))
+
+# modify YAML files (need to have the templates in place)
+yamls <- list.files("./data/qtl2_files/", "Lentil_GBS_LG.+\\d+dpi.yaml", full.names = TRUE)
+for (y in yamls){
+  
+  system2("sed", args=c(glue::glue("-r 's/Lentil_GBS([A-z_]+.csv)/{stacks_name}_{group_markers}\\1/g'"),y),
+          stdout = sub("Lentil_GBS_LG", sprintf("%s_%s", stacks_name, group_markers), y))
+}
 # save the environment
 save.image(filedate(sprintf("%s.%s",  clean_vcf_basename, group_markers), ".RData", 
                     "./data/intermediate_files", dateformat = FALSE))
+
 
 # Manually adjust markers at edges of LGs:
 # View the LOD scores and RF of LG4
