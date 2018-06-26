@@ -164,6 +164,7 @@ vcf_filtration <- function(vcf_file, miss_rates = seq(0.2, 0.1, -0.05), geno_rat
 # clean_vcf_file <- "data/intermediate_files/ref_stacks2_populations.snps.miss10.clean.vcf"
 find_LOD_rf <- function(clean_vcf_file, LOD_range = 3, rf_range = seq(0.1,0.5, 0.05), nworkers=8){
   clean_vcf_basename <<- sub(".clean.vcf", "", basename(clean_vcf_file))
+  stacks_name <<- sub("_populations.snps.miss\\d+", "", clean_vcf_basename)
   onemap_file <<- onemap_read_vcfR(vcfR::read.vcfR(clean_vcf_file), cross = "ri self",
                                   parent1 = "ILL6002_RF", 
                                   parent2 = "ILL7537_RF")
@@ -171,8 +172,8 @@ find_LOD_rf <- function(clean_vcf_file, LOD_range = 3, rf_range = seq(0.1,0.5, 0
   # Check for marker segregation
   ril_test <- test_segregation(onemap_file) 
   Bonferroni_alpha(ril_test)
-  pdf(filedate(sprintf("%s_seg_test", clean_vcf_basename), ".pdf", "plots/param_estimation"), 
-      width = 8, height = 6)
+  pdf(filedate(sprintf("%s_seg_test", clean_vcf_basename), ".pdf", 
+               glue::glue("./plots/{stacks_name}/param_estimation")), width = 8, height = 6)
   plot(ril_test)
   dev.off()
   good_markers <- select_segreg(ril_test, distorted = FALSE, numbers = TRUE)
@@ -215,7 +216,8 @@ find_LOD_rf <- function(clean_vcf_file, LOD_range = 3, rf_range = seq(0.1,0.5, 0
   p <- ggplot(LGs_sum , aes(x=max.rf, y=n, color=LOD_cat)) + geom_line(lwd=1) + 
     scale_color_brewer(palette = "Paired") + scale_y_continuous(name="Number of linkage groups", limits=c(0,y_max))
   p
-  ggsave(filename = filedate(sprintf("%s_LOD_rf_est", clean_vcf_basename), ".pdf", "./plots/param_estimation", dateformat=FALSE), 
+  ggsave(filename = filedate(sprintf("%s_LOD_rf_est", clean_vcf_basename), ".pdf", 
+                             glue::glue("./plots/{stacks_name}/param_estimation"), dateformat=FALSE), 
          width = 8, height = 6)
   completed_tasks <<- 2
   # save the environment
@@ -259,7 +261,7 @@ order_LG_markers <- function(LG, nworkers=8){
     # Get the order with all markers:
     LGg_ordered <- onemap::make_seq(LGg_f2_ord, "force")
     pdf(filedate(sprintf("%s_%s_%s_rf_graph", clean_vcf_basename, group_markers, paste0("LG", g)), 
-                 ".pdf", "./plots/temp_map_figures", dateformat=FALSE), 
+                 ".pdf", glue::glue("./plots/{stacks_name}/temp_map_figures"), dateformat=FALSE), 
         width = 20, height = 16)
     onemap::rf_graph_table(LGg_ordered, inter=FALSE)
     dev.off()
@@ -311,7 +313,7 @@ order_CHR_markers <- function(CHR_mks, nworkers=8){
       CHR1_ord <- onemap::order_seq(CHR_mks$sequences[[c]])
       CHR1_frame <- onemap::make_seq(CHR1_ord, "force")
       pdf(filedate(sprintf("%s_%s_%s_rf_graph", clean_vcf_basename, group_markers, c), 
-                   ".pdf", "./plots/temp_map_figures", dateformat=FALSE), 
+                   ".pdf", glue::glue("./plots/{stacks_name}/temp_map_figures"), dateformat=FALSE), 
           width = 20, height = 16)
       onemap::rf_graph_table(CHR1_frame, inter=FALSE)
       dev.off()
@@ -344,8 +346,8 @@ while ((completed_tasks+1)<=tasks_to_run) {
 
 ordered_markers_list <- get(sprintf("%s_ord", group_markers))
 # View linkage map
-pdf(filedate(sprintf("%s_%s_linkage_map_draft", clean_vcf_basename, group_markers), ".pdf", "./plots"), 
-    width = 10, height = 8)
+pdf(filedate(sprintf("%s_%s_linkage_map_draft", clean_vcf_basename, group_markers), ".pdf",
+             glue::glue("./plots/{stacks_name}")), width = 10, height = 8)
 draw_map(ordered_markers_list, names = TRUE, grid = FALSE, cex.mrk = 0.7)
 dev.off()
 # Number of markers in each Chromosome:
@@ -369,7 +371,8 @@ stacks_name <- sub("_populations.snps.miss\\d+", "", clean_vcf_basename)
 # map_file <- list.files("./data", sprintf(".*%s.+\\.map", stacks_name), 
 #                        full.names = TRUE, recursive = TRUE)
 geno_map <- read_delim(map_file, delim = " ",
-                       col_names = c("chr", "marker", "pos")) %>% dplyr::select(marker, chr, pos)
+                       col_names = c("chr", "marker", "pos")) %>% dplyr::select(marker, chr, pos) %>%
+  mutate(chr=paste0("LcChr", chr))
 write_csv(geno_map, filedate(sprintf("%s_%s_gmap", stacks_name, group_markers), 
                              ".csv", "./data/qtl2_files", dateformat = FALSE))
 # Save physical map for R/qtl2
