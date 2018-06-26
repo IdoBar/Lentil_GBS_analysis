@@ -354,9 +354,10 @@ LogMsg(sprintf("Number of markers in each linkage group: %s",
 
 # match chromosome positions of markers:
 markers <- colnames(onemap_file$geno)
-temp_map_file <- tempfile()
-onemap::write_map(ordered_markers_list,temp_map_file)
-temp_map <- read_delim(temp_map_file, delim = " ",
+map_file <- filedate(sprintf("%s.%s",  clean_vcf_basename, group_markers), ".map", 
+                     "./data/qtl2_files/", dateformat = FALSE)
+onemap::write_map(ordered_markers_list,map_file)
+temp_map <- read_delim(map_file, delim = " ",
            col_names = c("LG", "marker", "pos")) %>%
   mutate(Phys_Chrom=onemap_file$CHROM[match(marker, markers)], 
          Phys_Pos=onemap_file$POS[match(marker, markers)], marker_num=match(marker, markers)) %>% 
