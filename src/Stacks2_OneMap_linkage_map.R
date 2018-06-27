@@ -164,7 +164,8 @@ vcf_filtration <- function(vcf_file, miss_rates = seq(0.2, 0.1, -0.05), geno_rat
 # clean_vcf_file <- "data/intermediate_files/ref_stacks2_populations.snps.miss10.clean.vcf"
 find_LOD_rf <- function(clean_vcf_file, LOD_range = 3, rf_range = seq(0.1,0.5, 0.05), nworkers=8){
   clean_vcf_basename <<- sub(".clean.vcf", "", basename(clean_vcf_file))
-  stacks_name <<- sub("_populations.snps.miss\\d+", "", clean_vcf_basename)
+  stacks_name <<- sub("_populations.snps", "", sub("\\.miss\\d+", "", clean_vcf_basename))
+  # stacks_name <<- sub("_populations.snps.miss\\d+", "", clean_vcf_basename)
   onemap_file <<- onemap_read_vcfR(vcfR::read.vcfR(clean_vcf_file), cross = "ri self",
                                   parent1 = "ILL6002_RF", 
                                   parent2 = "ILL7537_RF")
@@ -367,7 +368,7 @@ temp_map <- read_delim(map_file, delim = " ",
                      ".csv", "./data/intermediate_files", dateformat = FALSE))
 
 # Save genetic map as csv for R/qtl2
-stacks_name <- sub("_populations.snps.miss\\d+", "", clean_vcf_basename)
+stacks_name <- sub("_populations.snps", "", sub("\\.miss\\d+", "", clean_vcf_basename))
 # map_file <- list.files("./data", sprintf(".*%s.+\\.map", stacks_name), 
 #                        full.names = TRUE, recursive = TRUE)
 geno_map <- read_delim(map_file, delim = " ",
