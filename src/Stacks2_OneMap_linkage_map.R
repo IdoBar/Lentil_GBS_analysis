@@ -15,7 +15,7 @@ pacman::p_load_gh("augusto-garcia/onemap") #
 # devtools::install_github('hadley/ggplot2')
 # pacman::p_load(Rhtslib)
 # Install and load needed packages
-package_list <- c("tidyverse", "qtl", "ASMap", "RColorBrewer", "Rsamtools", "doFuture", "vcfR",
+package_list <- c("tidyverse", "RColorBrewer", "Rsamtools", "doFuture", "vcfR",
                   "foreach", "glue") # "radiator", "plotly"
 pacman::p_load(char=package_list)
 
