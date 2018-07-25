@@ -1,1 +1,1 @@
-# Stacks2_OneMap_linkage_map
+# Stacks2_linkage_mapping
