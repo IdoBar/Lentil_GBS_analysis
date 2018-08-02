@@ -1,8 +1,8 @@
 ---
-title: "Lentil Resistance to Ascochyta QTL Mapping"
-subtitle: "Genome-by-Sequencing (ddRAD) Analysis"
+title: "QTL Mapping of Lentil Defence Response to <i>Ascochyta lentis</i>"
+subtitle: "Genome-by-Sequencing (ddRAD) Data Analysis Pipeline"
 author: "Ido Bar"
-date: "10/10/2017"
+date: "10 October 2017"
 output: 
     html_document:
       toc: true
@@ -19,7 +19,7 @@ csl: style/springer-basic-improved-author-date-with-italic-et-al-period.csl
 knitr::opts_chunk$set(list(echo = TRUE, eval=FALSE, message=FALSE))
 # load my utilities from Gist (https://gist.github.com/IdoBar/7f63547158ecdbacf31b54a58af0d1cc)
 # devtools::source_gist("7f63547158ecdbacf31b54a58af0d1cc", filename = "util.R")
-pacman::p_load(char = c("tidyverse", "captioner", "knitr", "pander", "DT"))
+pacman::p_load(char = c("tidyverse", "captioner", "knitr", "pander", "DT", "foreach", "doFuture"))
 # Font Format
 custom_font="consolas"
 fontFmt = function(x,font="consolas"){
@@ -53,22 +53,22 @@ Progeny_num <- GBS_read_data %>% filter(Gen=="F5") %>% nrow(.)
 Two distinct lentil (_Lens culinaris_) genotypes, resistant and susceptible to Ascochyta blight disease (**ILL7537** and **ILL6002**, respectively) were crossed and the F1 was recursively self-pollinated to create an F5 population. The population was sown and challenged with an inoculation of *Ascochyta lentis* (isolate AL4) and quantitatively phenotyped by four stem and leaf damage traits over the course of 4 weeks, at 7, 14, 21 and 28 days post inoculation (dpi).
 
 ### Genotyping
-Both parent genotypes (3 replicates each) and their F5 (n=`r Progeny_num`) progeny population, as well as represantatives of "Boomer" cultivar, were sent for genotyping-by-sequencing (GBS; AGRF, Adelaide). The AGRF uses ddRAD-based library preparation protocol, based on @peterson_double_2012. The DNA was digested using a combination of restriction enzymes (EcoRI and MseI) and only tags with both RE sites (one in each end) were selected for library preparation and sequenced on 2 lanes of an Illumina HiSeq2500 sequencing platform, producing 100 bp single-end reads (see per sample sequencing details in `r tbls(name="GBS_read_table", display="cite")`).  
+Both parent genotypes (x3 replicates each) and their F5 (n=`r Progeny_num`) progeny population, as well as represantatives of "Boomer" cultivar, were sent for genotyping-by-sequencing (GBS; AGRF, Adelaide). The AGRF uses ddRAD-based library preparation protocol, based on @peterson_double_2012. The DNA was digested using a combination of restriction enzymes (*EcoRI* and *MseI*) and only tags with both RE sites (one in each end) were selected for library preparation and sequenced on 2 lanes of an Illumina HiSeq2500 sequencing platform, producing 100 bp single-end reads (see per sample sequencing details in `r tbls(name="GBS_read_table", display="cite")`).  
 In average, `r formatC(sum_GBS_read_data$Reads_mean[1], digits=3)` reads were sequenced for each F5 sample, covering `r formatC(sum_GBS_read_data[1,2], format="f", digits=0, big.mark=",")` tags (loci), at a depth of x`r formatC(sum_GBS_read_data[1,3], format="f",digits=1)`; whereas for the parent lines, it was `r formatC(sum_GBS_read_data$Reads_mean[2], digits=3)` reads, covering `r formatC(sum_GBS_read_data[2,2], format="f", digits=0, big.mark=",")` tags at a depth of x`r formatC(sum_GBS_read_data[2,3], format="f", digits=1)`.  
-Basic bioinformatics analysis was performed by AGRF, mainly running the [Stacks ](http://catchenlab.life.illinois.edu/stacks/) v1.47 pipeline [@catchen_stacks:_2011;@catchen_stacks:_2013] to build a catalogue of consensus tag sequences to call variants from each sample.
+Basic bioinformatics analysis was performed by AGRF, mainly running the [Stacks](http://catchenlab.life.illinois.edu/stacks/) v1.47 pipeline [@catchen_stacks:_2011;@catchen_stacks:_2013] to build a catalogue of consensus tag sequences to call variants from each sample.
 
 ```{r eval=TRUE}
 DT::datatable(GBS_read_data, caption = tbls(name="GBS_read_table"), rownames = FALSE)
 ```
 
 ### Analysis Approach
-1. Combine each parent read files to one file (to increase coverage for them)
-2. Call variants using `r fontFmt("Stacks2")` de novo
-3. Map catalog back to the lentil genome (v1.2)
-4. Filter output files (remove samples and loci with too much missing information)
-5. Match chromosomal position to each loci
-6. Perform linkage mapping inside each chromosome
-7. Identify linkage groups of un-linked markers from previous step
+1. Assess `r fontFmt("Stacks2")` _de novo_ parameters for maximum coverage and minimum error rates  
+2. Combine each parent read files to one file (to increase coverage for them)
+3. Call variants using `r fontFmt("Stacks2")` _de novo_ pipeline using optimal parameters  
+4. Map catalog back to the lentil genome (v1.2; UoS)
+5. Integrate aligned tags into the catalog and match chromosomal position to each loci  
+6. Filter output files (remove samples and loci with too much missing information)  
+7. Perform linkage mapping and order markers inside each chromosome/linkage group  
 8. QTL analysis and visualisation
 9. Annotation of SNPs under the QTLs
 
@@ -76,14 +76,14 @@ DT::datatable(GBS_read_data, caption = tbls(name="GBS_read_table"), rownames = F
 
 
 ### Stacks pipelines
-AGRF provided the results of the `r fontFmt("Stacks")` *de novo* pipeline, run as a general population of samples. Alternatively, run `r fontFmt("Stacks")` `ref_map.pl` and `denovo_map.pl` pipelines.  
+AGRF provided the results of the `r fontFmt("Stacks")` *de novo* pipeline, run as a general population of samples. Alternatively, run `r fontFmt("Stacks2")` `ref_map.pl` or `denovo_map.pl` pipelines.  
 Other alternatives to `r fontFmt("Stacks")` are `r fontFmt("Heap")` or `r fontFmt("TASSEL")` [@glaubitz_tassel-gbs:_2014] 
 
 ### Stacks2 pipeline
-A new version of `r fontFmt("Stacks")` (v2.0b) is now available and the recommended approach, even when a reference genome is available, is to incorporate reference the genome alignment information by building loci _de novo_ and subsequently integrating the alignments of the consensus sequences into their _de novo_ dataset [@ParisLostparameterspace2017]. 
+A new version of `r fontFmt("Stacks")` (v2.0b) is now available and the recommended approach, even when a reference genome is available, is to incorporate the reference genome alignment information by building loci _de novo_ and subsequently integrating the alignments of the consensus sequences into their _de novo_ dataset [@ParisLostparameterspace2017]. 
 
 #### Assess errors in read files
-`kmer_filter` in `r fontFmt("Stacks")` was used to visualise the error profiles of the cleaned RAD-seq reads and the resulting K-mer frequency distributions were plotted. It seems that the overall error rate is low (most rare k-mers appear only once), but the coverage is also low 
+`kmer_filter` in `r fontFmt("Stacks")` was used to visualise the error profiles of the cleaned RAD-seq reads and the resulting K-mer frequency distributions were plotted. It seems that the overall error rate is low (most rare k-mers appear only once), but the coverage is also fairly low. 
 
 ```{bash filter_kmer}
 # Combine read files from parents
@@ -118,7 +118,7 @@ $HOME/etc/tools/SNP/stacks-2.0/bin/kmer_filter -p ~/data/Lentil_GBS/AGRF_CAGRF14
 ```
 
 #### Parameter and error estimation using de novo pipeline
-A subset of samples was selected, including the parent replicates (non-combined) and 20 other randomally selected genotypes.  A _de novo_ pipeline was run several times with the selected samples, varying just one parameter with each parse of the program. For the primary analysis, we varied the `ustacks` **m** parameter from 3 to 7, the `ustacks` **M** parameter from 1 to 8 and the `cstacks` **n** parameter as $n=M\pm\ 1$, while keeping all other parameters consistent (`r fontFmt("Stacks")` defaults are m3, M2 and n0), as described by [@ParisLostparameterspace2017; @RochetteDerivinggenotypesRADseq2017; @Mastretta-YanesRestrictionsiteassociatedDNA2015a].
+A subset of samples was selected, including the parent replicates (non-combined) and 20 other randomally selected genotypes.  A _de novo_ pipeline was run several times with the selected samples, varying just one parameter with each parse of the program. For the primary analysis, we varied the `ustacks` **m** parameter from 3 to 7, the `ustacks` **M** parameter from 1 to 8 and the `cstacks` **n** parameter as $n=M\pm\ 1$, while keeping all other parameters consistent (`r fontFmt("Stacks2")` defaults are m3, M2 and n0), as described by [@ParisLostparameterspace2017; @RochetteDerivinggenotypesRADseq2017; @Mastretta-YanesRestrictionsiteassociatedDNA2015a].
 
 
 ```{bash estimate_params}
@@ -129,7 +129,7 @@ cd $HOME/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/fastq
 mkdir ${JOB_NAME}_$DATE && cd ${JOB_NAME}_$DATE
 # Link parent files into the folder 
 ls -1 ../*.fq.gz* | grep -vE "NegControl|/C|_RF.fq.gz" | xargs -I{} ln -s {} ./
-# link 20 sample files
+# link 20 random sample files
 ls -1 ../*.fq.gz* | grep -vE "NegControl|/ILL" | sort -R | head -n 20 | xargs -I{} ln -s {} ./
 # rename filenames 
 my_rename -v 's/-I\d+_[ACGT]+.fq.gz[.bak]*/.fq.gz/' *
@@ -185,7 +185,7 @@ The resulting `.log` files were parsed to retrieve the following statistics:
 4. The distribution of the number of SNPs per locus (from `populations.snps.vcf` files)  
 5. The coverage per sample (from `denovo_map.log` files)  
 
-Replicate samples were used to estimate three error rates using R:  
+Replicate samples were used to estimate the rates of three types of errors:  
 1. Locus error rate, corresponding to missing data at the locus level and measured as **the number of loci present in only one of the samples of a replicate pair**, divided by the total number of loci found.  
 2. Allele error rate, calculated as the **number of allele mismatches between replicate pairs, divided by the number of loci being compared** (all the SNPs within a tag).  
 3. SNP error rate, measured as the proportion of SNP mismatches between replicate pairs.  
@@ -196,7 +196,7 @@ knitr::include_graphics('./plots/RAD_errors.png')
 ```
 `r figs(name="error_rates_expl")`
 
-A formula was used to balance between high number of polymorphic loci, coverage per sample and low error rates, identifying three optimal combinations of parameters favouring high number of polymorphic loci, low error rates and high coverage (*M2m3n3, M3m4n3 and M1m4n2*, highlighted in violet, green and blue, respectively in `r tbls(name="param_estimates", display="cite")`). 
+A formula was used to balance between high number of polymorphic loci, high coverage per sample and low error rates, identifying three optimal combinations of parameters favouring high number of polymorphic loci, low error rates and high coverage (*M2m3n3, M3m4n3 and M1m4n2*, highlighted in violet, green and blue, respectively in `r tbls(name="param_estimates", display="cite")`). 
 
 ```{r param_stats, eval=TRUE}
 # read log files with loci stats
@@ -246,11 +246,11 @@ DT::datatable(as.data.frame(param_table), caption = tbls(name="param_estimates")
 ```
 
 
-For comparison, `r fontFmt("Stacks")` default parameters (m3, M2 and n0) resulted in a combined score of `r default_rank$Score` and was ranked #`r default_rank$Rank` out of `r nrow(param_table)` possible combinations. 
+For comparison, `r fontFmt("Stacks2")` default parameters (m3, M2 and n0) resulted in a combined score of `r default_rank$Score` and was ranked #`r default_rank$Rank` out of `r nrow(param_table)` possible combinations. 
 
 
 #### Integrated de novo and genome-mapped approach
-Once identified, the optimal _de novo_ parameters were used for another _de novo_ run with all the samples (this time combining the parent read files to increase coverage). Once the _de novo_ pipeline was complete, the final catalog loci (now stored in `catalog.fa.gz`) were aligned to the genome with `r fontFmt("GSNAP")` version 2018-03-25 [@WuGMAPGSNAPGenomic2016a]. The `stacks_integrate_alignments` script was then used to integrate the alignments back into the `gstacks` files, followed by another `populations` run to assign genomic coordinates for each locus in the output files. (see [discussion](https://groups.google.com/d/msg/stacks-users/ZsAnJXCs8uo/P2BjXCCsAwAJ)). 
+Once identified, the optimal _de novo_ parameters were used for another _de novo_ run with all the samples (this time combining the parent read files to increase coverage). Once the _de novo_ pipeline was completed, the final catalog loci (now stored in `catalog.fa.gz`) were aligned to the genome with `r fontFmt("GSNAP")` version 2018-03-25 [@WuGMAPGSNAPGenomic2016a]. The `stacks_integrate_alignments` script was then used to integrate the alignments back into the `gstacks` files, followed by another `populations` run to assign genomic coordinates for each locus in the output files. (see [discussion](https://groups.google.com/d/msg/stacks-users/ZsAnJXCs8uo/P2BjXCCsAwAJ)). 
 
 
 ```{bash stacks2_denovo_integrated}
@@ -334,7 +334,7 @@ Username: _Rebecca.ford\@griffith.edu.au_, Password: _Harrison8_
 * Login and download the full sequence using the instructions on this [page](http://knowpulse2.usask.ca/portal/node/1466897) with the username: _rfAustralia_, Password: _NMQDesreRw_ (this is separate from your login information for KnowPulse to allow use of wget for download)
 
 #### Reference map pipeline
-The raw reads were multiplexed and barcodes and adaptors removed by `r fontFmt("Stacks")` `process_tags.pl`. Trimmed reads were mapped to the *L. culinaris* reference genome (v1.2;  [KnowPulse](http://knowpulse.usask.ca/portal/lentil-genome); @SandersonKnowPulsebreederfocused2011), using `r fontFmt("Bowtie2", custom_font)` (version 2.3.2) with the `--very-sensitive` option in `--end-to-end` (global) mode. The resulting SAM files were processed to mark duplicates with `r fontFmt("SAMBLASTER", custom_font)` v0.1.24 [@faust_samblaster:_2014], add read group information and convert into sorted BAM file with [Picard](https://broadinstitute.github.io/picard/) v2.5.0. Mapping quality and coverage were assessed with `r fontFmt("Qualimap2")` v2.2.2a  [@okonechnikov_qualimap_2016]. 
+The raw reads were multiplexed and barcodes and adaptors removed by `r fontFmt("Stacks")` `process_tags.pl`. Trimmed reads were mapped to the *L. culinaris* reference genome (v1.2;  [KnowPulse](http://knowpulse.usask.ca/portal/lentil-genome); @SandersonKnowPulsebreederfocused2011), using `r fontFmt("Bowtie2", custom_font)` (version 2.3.2) with the `--very-sensitive` option in `--end-to-end` (global) mode. The resulting SAM files were processed to mark duplicates with `r fontFmt("SAMBLASTER", custom_font)` v0.1.24 [@faust_samblaster:_2014], add read group information and convert into sorted BAM file with [Picard](https://broadinstitute.github.io/picard/) v2.5.0. Mapping quality and coverage were assessed with `r fontFmt("Qualimap2")` v2.2.2-dev [@okonechnikov_qualimap_2016]. 
 
 Mapping to the genome:  
 
@@ -378,6 +378,10 @@ gawk -v ARRAY_IND=$PBS_ARRAY_INDEX "NR==ARRAY_IND" $CMDS_FILE | bash' > ${JOB_NA
 JOBS_NUM=`wc -l ${JOB_NAME}_${DATE}.cmds | gawk '{print $1}'`
 qsub -J1-${JOBS_NUM} -v CMDS_FILE=${JOB_NAME}_${DATE}.cmds ${JOB_NAME}_${DATE}.pbs 
 # Job ID 4984009[]
+# Assess mapping with Qualimap
+ls -1 *.bam | gawk '{sample=gensub(".bam", "", "1", $1); printf "%s\t%s\n", sample, $1}'  > bams_list.txt
+ 
+echo 'cd $PBS_O_WORKDIR; pigz -cd ~/scratch/data/reference_genomes/Lens_culinaris_v1.2/Lensculinaris_1.2b_genes.gff3.gz > Lensculinaris_1.2b_genes.gff3; qualimap multi-bamqc -gff Lensculinaris_1.2b_genes.gff3 -r -c -d bams_list.txt -outdir qualimap_report; rm Lensculinaris_1.2b_genes.gff3' | qsub -V -q qweek_s -l select=1:ncpus=12:mem=8GB,walltime=20:00:00 -m be -M i.bar@griffith.edu.au -N BT2_qualimap # 4759817.pbsserver
 ```
 
 
@@ -427,7 +431,7 @@ echo "cd \$PBS_O_WORKDIR; mkdir -p ./${RUN}_$DATE/populations.r50; $HOME/etc/too
 
 
 ### Variant Filtering
-Variants were first screened to clear calls with low Genotyping Quality ($GQ<20$) and too low or too high Depth coverage ($DP<5$ || $DP>200$). The remaining variant calls at each locus were counted and loci were filtered to include only SNP sites that with valid calls in at least 50% of the samples (NS $\ge$ 73). Filtration was performed using `r fontFmt("SnpSift", custom_font)` v4.3.1p [@ruden_using_2012; @cingolani_program_2012]. 
+Variants were first screened to clear calls with low Genotyping Quality ($GQ<20$) and too low or too high Depth coverage ($DP<7$ || $DP>500$). The remaining variant calls at each locus were counted and loci were filtered to include only SNP sites with valid calls in at least 50% of the samples ($NS \ge `r round((Progeny_num+2)/2)`$). Filtration was performed using `r fontFmt("SnpSift", custom_font)` v4.3p [@ruden_using_2012; @cingolani_program_2012]. 
 
 ```{bash vcf_filtering}
 # install SnpSift and SnpEff
@@ -440,88 +444,186 @@ pigz -cd gstacks.vcf.gz | gawk '$1 ~ /^#/ || ($4 ~ /[ACGT]/ && $5 ~ /[ACGT]/)' >
 # Extract Chromosome location for each tag
 pigz -cd gstacks.fa.gz | grep ">" | gawk -vOFS="\t" 'BEGIN{print "LOC","CHROM","POS", "STRAND"}; {sub(">", "", $1); match($2, /pos=(LcChr[0-9]):([0-9]+):([-+])/, arr); print $1,arr[1],arr[2],arr[3]}' > tag_chrom.map
 
+min_GQ = 20
+min_DP = 7
+max_DP = 500
 # Recode genotypes as missing if below a certain threshold, such as genotyping quality or depth (GQ:DP) 
-SnpSift filter 'AF>0.2' gstacks.snps.vcf | SnpSift gtfilter -gv './.' 'GQ<20 || DP<5 || DP>200'   > gstacks_GQ_DP_corr_AF.vcf
+SnpSift filter 'AF>0.1' gstacks.snps.vcf | SnpSift gtfilter -gv './.' 'GQ<20 || DP<7 || DP>500'   > gstacks_GQ_DP_corr_AF.vcf
 
 # Further filtering was done in R - Jump to vcf_filtration_R
  
 ```
 
-Additional processing of the variants was performed in R v`r paste(R.version$major, R.version$minor, sep=".")` [@R_2017], keeping only bi-allelic SNP polymorphoic between the parents genotypes and filtering out markers and samples with less than 90% valid genotype calls. Finally, correct chromosome position information was assigned for each locus based on the genomic coordinates. 
+Additional processing of the variants was performed in R v`r paste(R.version$major, R.version$minor, sep=".")` [@R_2017], keeping only bi-allelic SNP polymorphoic between the parents genotypes and recursively filtering out markers and samples with non-valid genotype calls (gradually increasing the threshold for valid call rates from 80% to 90%). 
 
 ```{r vcf_filtration_R}
-install.deps("tidyverse")
+# Install and load needed packages
+package_list <- c("tidyverse", "RColorBrewer") # "radiator", 
+pacman::p_load(char=package_list)
+
+
 options(stringsAsFactors=FALSE)
 # Load vcf file
-stacks_dir <- "../Analysis/ref_stacks/stacks2_population_04_12_2017"
-vcf_file <- "gstacks_GQ_DP_corr_AF.clean.sorted.vcf"  #  gstacks_no_RL_NS_GQ_DP_filtered.vcf
+stacks_dir <- "../Stacks_vcf_files"
+vcf_file <- "stacks_M1m4n2_populations.snps.vcf"  # ref_stacks2_populations.snps.vcf
 vcf_data <- read_tsv(file.path(stacks_dir, vcf_file), comment = "##") #%>% 
   # mutate(`#CHROM`=as.numeric(unlist(strsplit(`#CHROM`, split="_"))[2]))  # n_max=100
 sample_cols <- colnames(vcf_data)[10:ncol(vcf_data)]
 # Relace missing genotypes and heterozygotes with ./.
 vcf_data <- vcf_data %>% mutate_at(vars(one_of(sample_cols)), 
        .funs = funs(if_else(grepl("^1/0", .) | grepl("^0/1", .) | grepl("^\\.$", .), "./.", .)))
-# exclude markers
-miss_rate = 0.1
-exclude_markers <- apply(vcf_data[sample_cols], 1, 
-                         function(m) sum(grepl("^\\./\\.", m) | grepl("^\\.$", m))>miss_rate*length(sample_cols))
-
-table(exclude_markers)
-vcf_data <- vcf_data %>% filter(!exclude_markers)
-# Select only polymorphic markers ()
-ploy_alpha <- 0.05
-poly_markers <- apply(vcf_data[sample_cols], 1, function(g) {
-  # g <- vcf_data[1, sample_cols]
+# Check if we have any heterozygote left
+# sum(apply(vcf_data[sample_cols], 1, function(r) sum(grepl("^1/0", r) || grepl("^0/1", r))))
+exclude_markers <- FALSE
+vcf_filt_data <- vcf_data
+incl_samples <- sample_cols
+counter=1
+miss_rates <- seq(0.2, 0.1, -0.05)
+for (m in miss_rates){
+  
+  # sample_col_filt <- colnames(vcf_filt_data)[10:ncol(vcf_filt_data)]
+  # m <- miss_rates[3]
+  
+  excl_samples <- incl_samples
+  
+  while (length(excl_samples)>0) {
+    # vcf_filt_data <- vcf_filt_data %>% filter(!exclude_markers)
+    exclude_markers <- apply(vcf_filt_data[incl_samples], 1, function(marker) {
+      sum(grepl("^\\./\\.", marker) | grepl("^\\.$", marker)) > m*length(incl_samples)
+    } )
+    table(exclude_markers)
+    
+    vcf_filt_data <- vcf_filt_data %>% filter(!exclude_markers)
+    # Find samples with too many missing markers
+    geno_rate <- 0.8
+    excl_samples <- incl_samples[apply(vcf_filt_data[incl_samples], 2, 
+                                       function(geno) sum(grepl("\\./\\.", geno))>(1-geno_rate)*nrow(vcf_filt_data))]
+    
+    
+    # Now repeat marker exclusion without the problematic genotypes
+    incl_samples <- incl_samples[!incl_samples %in% excl_samples]
+    LogMsg(sprintf("Genotype and Marker filtering, round %d, missing rate %.2f", counter, m))
+    LogMsg(sprintf("Filtered %d genotypes and %d markers", length(excl_samples), sum(exclude_markers)))
+    counter <- counter + 1
+  }
+  
+}
+parents <- incl_samples[grepl("_RF", incl_samples)]
+poly_markers <- apply(vcf_filt_data[parents], 1, function(g) {
+  # g <- vcf_data[1, parents]
   genotypes <- sub(":.+", "", g)
+  # log_vec <- ifelse(biallelic, length(prop_names[!grepl("\\.", prop_names)])==2,
+  # length(prop_names[!grepl("\\.", prop_names)])>1)
   p_table <- prop.table(table(genotypes))
   g_table <- p_table[!grepl("\\./\\.", names(p_table))]
   if (length(g_table)==2) {
-    res <- g_table[1]>=ploy_alpha && g_table[2]>=ploy_alpha
+    res <- TRUE # g_table[1]>0.05 && g_table[2]>0.05
   }  else res <- FALSE
   return(res)
 })
 
 table(poly_markers)
+exclude_genotypes <- sample_cols[!sample_cols %in% incl_samples]
+# Remove missing genotypes and non polymorphic markers
+clean_vcf <- vcf_filt_data %>% filter(poly_markers) %>% dplyr::select(-one_of(exclude_genotypes)) #%>% 
+  # mutate(ID=paste(ID, POS, sep= "_"))
 
-vcf_data <- vcf_data %>% filter(poly_markers)
-
-# remove samples with missing data
-
-call_rate = 1 - miss_rate #   0.65
-excl_samples <- sample_cols[apply(vcf_data[sample_cols], 2, 
-                function(g) sum(!grepl("\\./\\.", g))<call_rate*nrow(vcf_data))]
-excl_samples <- c(excl_samples, sample_cols[grepl("RL", sample_cols)])
-
-# Now repeat marker exclusion without the problematic genotypes
-incl_samples <- sample_cols[!sample_cols %in% excl_samples]
-# miss_rate = 0.2
-exclude_markers_updated <- apply(vcf_data[incl_samples], 1, 
-                         function(m) sum(grepl("\\./\\.", m))>miss_rate*length(incl_samples))
-table(exclude_markers_updated)
-# Remove missing genotypes and markers, update marker information (CHROM, POS, LOC)
-clean_vcf <- vcf_data[!exclude_markers_updated,] %>% dplyr::select(-one_of(excl_samples)) %>%
-  mutate(ID=paste(ID, POS, sep= "_"))
-
-# Load marker map (extracted from gstacks.fa)
-marker_map <- read_tsv(file.path(stacks_dir,"tag_chrom.map")) %>% 
-  dplyr::rename(CHROM_POS=POS) 
+# Load marker map (extracted from gstacks.fa) - not needed in Stacks2
+# marker_map <- read_tsv(file.path(stacks_dir,"tag_chrom.map")) %>% 
+#   dplyr::rename(CHROM_POS=POS) 
   # left_join(marker_map, c("#CHROM" = "LOC")) %>% 
   # mutate(ID=paste0("tag",`#CHROM`, POS, sep="_"), `#CHROM` = CHROM, 
   #        POS=ifelse(STRAND=="+", CHROM_POS+POS, CHROM_POS-POS)) %>% 
   # dplyr::select(-one_of(colnames(marker_map)))
 
 # Write back vcf
-clean_vcf_file <- filedate(sprintf("gstacks_GQ_DP_corr_AF_BiPol_miss%d",miss_rate*100), ".clean.vcf","data")
+vcf_basename <- tools::file_path_sans_ext(vcf_file)
+clean_vcf_file <- filedate(sprintf("%s.miss%d",vcf_basename, m*100), ".clean.vcf","data", 
+                           dateformat = FALSE)
+                            # sub(".clean.sorted.vcf", "_miss40.clean.vcf",vcf_file, fixed = TRUE))
+
+# unlink(clean_vcf_file)
 # Copy the header into a new file
 system2("grep", args=c("'^##'", file.path(stacks_dir, vcf_file)), stdout = clean_vcf_file)
 if (file.exists(clean_vcf_file)) write_tsv(clean_vcf, clean_vcf_file, append = TRUE, col_names = TRUE)
 
 ```
 
-
 ### Linkage mapping
+
+#### ASMap
+The clean, filtered `.vcf` output files were recoded to `r fontFmt("MSTmap", custom_font)` format, according to the [specifications](http://www.mstmap.org/):
+
+* It must have markers in rows and genotypes in columns
+* Marker names are required to be in the rownames component of the object
+* Genotype names residing in the names (`colnames()`)
+
+> Before constructing a linkage map it is prudent to go through a pre-construction checklist to ensure that the best quality genotypes/markers are being used to construct the linkage map. A non-exhaustive ordered checklist for an unconstructed marker set could be:
+
+* Check missing allele scores across markers for each genotype as well as across genotypes for each marker.  Markers or genotypes with a high proportion of missing information could be problematic.
+* Check for genetic clones or individuals that have a high proportion of matching allelic information between them.
+* Check markers for excessive segregation distortion.  Highly distorted markers may not map to unique locations.
+* Check  markers  for  switched  alleles.   These  markers  will  not  cluster  or  link  well  with other  markers  during  the  construction  process  and  it  is  therefore  preferred  to  repair their alignment before proceeding.
+* Check for co-locating markers. For large linkage maps it would be more computationally efficient from a construction standpoint to temporarily omit markers that are co-located with other markers.
+
+The recoded file was then analysed using `r fontFmt("ASMap", custom_font)` `r fontFmt("R", custom_font)` package [documentation](https://arxiv.org/pdf/1705.06916.pdf).
+
+
+
+
 #### OneMap
-The clean, filtered VCF file was imported to R and linkage map was constructed using the "Kosambi" method [@KosambiD.D.estimationmapdistances2012], implemented in `r fontFmt("OneMap", custom_font)` v`r packageVersion("onemap")` [@margarido_onemap:_2007] package, while removing any SNPs deviating from a 1:1 segregation pattern. The linkage map was then manually evaluated to assess its concordance with the genomic coordinates (>96% of the positions match at the chromosome level).
+Alternatively, the filtered VCF files (one for each `r fontFmt("Stacks2")` combination of parameters) were then processed by an in-house `r fontFmt("R")` script `Lentil_GBS_Stacks2_linkage_map_unix.R`, to estimate the optimal LOD score and maximum recombinant factor (`max.rf`) to construct a linkage map with markers well distributed across the genome. For all the denovo combinations, the optimal parameters were found to be `LOD=5` and `max.rf=0.35`. The linkage map was constructed using the "Kosambi" method [@KosambiD.D.estimationmapdistances2012], implemented in `r fontFmt("OneMap", custom_font)` v`r packageVersion("onemap")` [@margarido_onemap:_2007] package, while removing any SNPs deviating from a 1:1 segregation pattern. The linkage map was then manually evaluated to assess its concordance with the genomic coordinates (after consolidating orphan contigs into their parent chromosomes). 
+>96% of the markers in the linkage groups matched their genomic coordinates at the chromosome level.
+
+```{bash process_vcfs}
+# prepare commands
+NCPUS=8
+MARKER_GROUPS="chr" # choose chr for chromosome-based or 'lg' for denovo linkage-based
+JOB_NAME="process_vcfs_$MARKER_GROUPS"
+
+cd ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/GBS_analysis
+find ~/data/Lentil_GBS/AGRF_CAGRF14978_CB2YGANXX_gbs/Stack2_vcf_files -name "*.vcf" | sort -r | gawk -v ncpus=$NCPUS -v mk_group=$MARKER_GROUPS '{printf "cd $PBS_O_WORKDIR; Rscript Lentil_GBS_Stacks2_linkage_map_unix.R \"%s\" -n %s --lod 5 --max_rf 0.35 --group %s\n", $0, ncpus, mk_group}' > ${JOB_NAME}.cmds
+# Prepare PBS script
+echo '#!/bin/bash 
+#PBS -V
+#PBS -l select=1:ncpus=8:mem=16GB,walltime=90:00:00
+#PBS -m be
+#PBS -M i.bar@griffith.edu.au
+#PBS -q qweek_s
+ 
+cd $PBS_O_WORKDIR
+gawk -v ARRAY_IND=$PBS_ARRAY_INDEX "NR==ARRAY_IND" $CMDS_FILE | bash' > ${JOB_NAME}.pbs
+
+# submit the jobs to the scheduler
+JOBS_NUM=`wc -l ${JOB_NAME}.cmds | gawk '{print $1}'`
+qsub -J1-${JOBS_NUM} -N ${JOB_NAME:0:11} -v CMDS_FILE=${JOB_NAME}.cmds ${JOB_NAME}.pbs 
+
+```
+
+```{r vcf_comparison, eval=TRUE, message=FALSE}
+pacman::p_load_gh(c("augusto-garcia/onemap")) # "thierrygosselin/radiator", "augusto-garcia/onemap", "IdoBar/onemap@patch-3"
+# Onemap requires R>=3.4 and Rhtslib and zlibbioc - install through conda on the server
+# vignette("Inbred_Based_Populations") # OneMap tutorial
+# devtools::install_github("augusto-garcia/onemap")
+# Install and load needed packages
+package_list <- c("tidyverse", "RColorBrewer") # "radiator", 
+pacman::p_load(char=package_list)
+# Import to OneMap 
+filtered_vcf_files <- list.files("./data/intermediate_files", ".+miss10.clean.vcf", full.names = TRUE)
+# read both files and print output
+# registerDoFuture()
+# plan(multisession, workers = 2)
+registerDoSEQ() # to run sequentially
+y <- foreach(f=filtered_vcf_files) %dopar% {
+  invisible(capture.output(onemap_file <- onemap::onemap_read_vcfR(vcfR::read.vcfR(f), cross = "ri self",
+                                parent1 = "ILL6002_RF", 
+                                parent2 = "ILL7537_RF")))
+  
+  cat(sprintf("Structure of filtered VCF file %s:\n", f)) 
+  print(onemap_file)
+}
+
+```
 
 
 ### QTL Analysis
@@ -619,6 +721,7 @@ echo "cd \$PBS_O_WORKDIR; export PYENV_VERSION=miniconda2-latest; ~/etc/tools/An
 
 
 #### Resources
+* [Stacks2_linkage_mapping](https://github.com/IdoBar/Stacks2_linkage_mapping) - A GitHub repository of the R scripts used for this analysis.
 * [VCF-tricks](https://github.com/IARCbioinfo/VCF-tricks)
 * [VCF-downgrade](https://gist.github.com/danielecook/f1d80babd7d601a74981#file-vcf_downgrade-sh)
 * [Vcf2Mapmaker](https://github.com/aubombarely/GenoToolBox/blob/master/SNPTools/Vcf2Mapmaker)
@@ -828,22 +931,7 @@ echo "cd \$PBS_O_WORKDIR; export PYENV_VERSION=miniconda2-latest; ~/etc/tools/An
 <!-- ``` -->
 
 
-<!-- #### ASMap -->
-<!-- Alternatively, the `.vcf` output file was recoded to `r fontFmt("MSTmap", custom_font)` format, according to the [specifications](http://www.mstmap.org/): -->
 
-<!-- * It must have markers in rows and genotypes in columns -->
-<!-- * Marker names are required to be in the rownames component of the object -->
-<!-- * Genotype names residing in the names (`colnames()`)  -->
-
-<!-- > Before constructing a linkage map it is prudent to go through a pre-construction checklist to ensure that the best quality genotypes/markers are being used to construct the linkage map. A non-exhaustive ordered checklist for an unconstructed marker set could be: -->
-
-<!-- * Check missing allele scores across markers for each genotype as well as across genotypes for each marker.  Markers or genotypes with a high proportion of missing information could be problematic. -->
-<!-- * Check for genetic clones or individuals that have a high proportion of matching allelic information between them. -->
-<!-- * Check markers for excessive segregation distortion.  Highly distorted markers may not map to unique locations. -->
-<!-- * Check  markers  for  switched  alleles.   These  markers  will  not  cluster  or  link  well  with other  markers  during  the  construction  process  and  it  is  therefore  preferred  to  repair their alignment before proceeding. -->
-<!-- * Check for co-locating markers. For large linkage maps it would be more computationally efficient from a construction standpoint to temporarily omit markers that are co-located with other markers. -->
-
-<!-- The recoded file was and imported to R and analysed using `r fontFmt("ASMap", custom_font)` [documentation](https://arxiv.org/pdf/1705.06916.pdf). -->
 
 <!-- ### Heap pipeline (currently not working) -->
 <!-- Additional mapping was performed using `r fontFmt("BWA", custom_font)` v0.7.15-r1140 [@li_fast_2009], to enable SNP calling with `r fontFmt("Heap", custom_font)` v0.8 [@kobayashi_heap:_2017]. -->
