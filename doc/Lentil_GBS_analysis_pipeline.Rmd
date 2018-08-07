@@ -440,15 +440,15 @@ conda install -c bioconda snpsift snpeff vcftools
 alias SnpSift='java -jar /c/Unix_tools/snpEff/SnpSift.jar'
 # extract the vcf file and select only SNP sites 
 cd ${RUN}_$DATE  # stacks2_population_16_05_2018, denovo_stacks2_29_05_2018
-pigz -cd gstacks.vcf.gz | gawk '$1 ~ /^#/ || ($4 ~ /[ACGT]/ && $5 ~ /[ACGT]/)' > gstacks.snps.vcf
+# pigz -cd gstacks.vcf.gz | gawk '$1 ~ /^#/ || ($4 ~ /[ACGT]/ && $5 ~ /[ACGT]/)' > gstacks.snps.vcf
 # Extract Chromosome location for each tag
-pigz -cd gstacks.fa.gz | grep ">" | gawk -vOFS="\t" 'BEGIN{print "LOC","CHROM","POS", "STRAND"}; {sub(">", "", $1); match($2, /pos=(LcChr[0-9]):([0-9]+):([-+])/, arr); print $1,arr[1],arr[2],arr[3]}' > tag_chrom.map
+# pigz -cd gstacks.fa.gz | grep ">" | gawk -vOFS="\t" 'BEGIN{print "LOC","CHROM","POS", "STRAND"}; {sub(">", "", $1); match($2, /pos=(LcChr[0-9]):([0-9]+):([-+])/, arr); print $1,arr[1],arr[2],arr[3]}' > tag_chrom.map
 
 min_GQ = 20
 min_DP = 7
 max_DP = 500
 # Recode genotypes as missing if below a certain threshold, such as genotyping quality or depth (GQ:DP) 
-SnpSift filter 'AF>0.1' gstacks.snps.vcf | SnpSift gtfilter -gv './.' 'GQ<20 || DP<7 || DP>500'   > gstacks_GQ_DP_corr_AF.vcf
+SnpSift filter 'AF>0.1' ref_stacks2_populations.snps.vcf | SnpSift gtfilter -gv './.' 'GQ<20 || DP<7 || DP>500'   > filtered_VCFs/ref_stacks2_populations.snpsift.vcf
 
 # Further filtering was done in R - Jump to vcf_filtration_R
  
@@ -562,17 +562,17 @@ The clean, filtered `.vcf` output files were recoded to `r fontFmt("MSTmap", cus
 
 * Check missing allele scores across markers for each genotype as well as across genotypes for each marker.  Markers or genotypes with a high proportion of missing information could be problematic.
 * Check for genetic clones or individuals that have a high proportion of matching allelic information between them.
-* Check markers for excessive segregation distortion.  Highly distorted markers may not map to unique locations.
+* Check markers for excessive segregation distortion. Highly distorted markers may not map to unique locations.
 * Check  markers  for  switched  alleles.   These  markers  will  not  cluster  or  link  well  with other  markers  during  the  construction  process  and  it  is  therefore  preferred  to  repair their alignment before proceeding.
 * Check for co-locating markers. For large linkage maps it would be more computationally efficient from a construction standpoint to temporarily omit markers that are co-located with other markers.
 
-The recoded file was then analysed using `r fontFmt("ASMap", custom_font)` `r fontFmt("R", custom_font)` package [documentation](https://arxiv.org/pdf/1705.06916.pdf).
+The recoded file was then analysed using `r fontFmt("ASMap", custom_font)` [@TaylorPackageASMapEfficient2017] `r fontFmt("R", custom_font)` package (see [documentation](https://arxiv.org/pdf/1705.06916.pdf)).
 
 
 
 
 #### OneMap
-Alternatively, the filtered VCF files (one for each `r fontFmt("Stacks2")` combination of parameters) were then processed by an in-house `r fontFmt("R")` script `Lentil_GBS_Stacks2_linkage_map_unix.R`, to estimate the optimal LOD score and maximum recombinant factor (`max.rf`) to construct a linkage map with markers well distributed across the genome. For all the denovo combinations, the optimal parameters were found to be `LOD=5` and `max.rf=0.35`. The linkage map was constructed using the "Kosambi" method [@KosambiD.D.estimationmapdistances2012], implemented in `r fontFmt("OneMap", custom_font)` v`r packageVersion("onemap")` [@margarido_onemap:_2007] package, while removing any SNPs deviating from a 1:1 segregation pattern. The linkage map was then manually evaluated to assess its concordance with the genomic coordinates (after consolidating orphan contigs into their parent chromosomes). 
+Alternatively, the filtered VCF files (one for each `r fontFmt("Stacks2")` combination of parameters) were processed by an in-house `r fontFmt("R")` script `Lentil_GBS_Stacks2_linkage_map_unix.R`, to estimate the optimal LOD score and maximum recombinant factor (`max.rf`) to construct a linkage map with markers well distributed across the genome. For all the denovo combinations, the optimal parameters were found to be `LOD=5` and `max.rf=0.35`. The linkage map was constructed using the "Kosambi" method [@KosambiD.D.estimationmapdistances2012], implemented in `r fontFmt("OneMap", custom_font)` v`r packageVersion("onemap")` [@margarido_onemap:_2007] package, while removing any SNPs deviating from a 1:1 segregation pattern. The linkage map was then manually evaluated to assess its concordance with the genomic coordinates (after consolidating orphan contigs into their parent chromosomes). 
 >96% of the markers in the linkage groups matched their genomic coordinates at the chromosome level.
 
 ```{bash process_vcfs}
@@ -648,79 +648,10 @@ Loci and QTL positions across the linkage map were prepared in R and exported fo
 In addition, the constructed genetic map and genotype-phenotype data were exported for analysis in `r fontFmt("Windows QTL Cartographer", custom_font)` v2.5_011 [@shengchu_wang_windows_2012], using a CIM approach and determine the contribution of each QTL to the phenotype variability. 
 
 #### SNP annotation 
-Physical (chromosomal) locations of the QTL peaks were determined and SNPs and genes were extracted from a range of 2Mbp up and downstream of these locations. Functional annotation determined the effect of each SNP on the underlying genes.  
-Gene models were predicted from the _L. culinaris_ genome and transcriptome using `r fontFmt("Seqping", custom_font)` v0.1.45.1 [@chan_seqping:_2017], which requires the following dependencies:
+Physical (chromosomal) locations of the QTL peaks were determined and SNPs and genes were extracted from a range of 2 Mbp up and downstream of these locations. Functional annotation determined the effect of each SNP on the underlying genes.  
 
-`r fontFmt("Seqping", custom_font)` is a gene model pipeline. In other words it links together many steps and programs to produce final model. For this reason, you must first install a number of programs that `r fontFmt("Seqping", custom_font)` depends on:  
-a. [BLAST 2.2.25](ftp://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/)  
-b. [CD-HIT 4.5.4](http://www.bioinformatics.org/downloads/index.php/cd-hit/)  
-c. [Exonerate 2.2](http://www.ebi.ac.uk/~guy/exonerate/)  
-d. [GlimmerHMM 3.0](ftp://ccb.jhu.edu/pub/software/glimmerhmm/)  
-e. [AUGUSTUS 2.6.1](http://bioinf.uni-greifswald.de/augustus/binaries/) ([BUSCO](http://busco.ezlab.org/) might be an easier alternative)  
-f. [SNAP-2012-05-17](http://korflab.ucdavis.edu/Software/)  
-g. [MAKER 2.28](http://www.yandell-lab.org/software/maker.html)  
-h. [EMBOSS 6.4.0](http://emboss.sourceforge.net/download/)  
-i. [HMMER 3](http://hmmer.janelia.org/software)  
-j. [RepeatMasker-3-3-0](http://www.repeatmasker.org/RMDownload.html)  
-k. [NCBI splign 2.0.8](ftp://ftp.ncbi.nlm.nih.gov/genomes/TOOLS/splign/linux-i64/splign.tar.gz) (includes binaries for `r fontFmt("compart", custom_font)`)  
-l. [scipio 1.4**](http://www.webscipio.org/webscipio/download_scipio_1_4)    
-m. [Seqping](https://sourceforge.net/projects/seqping/files/current/)  
-n. [pblat](http://icebert.github.io/pblat/) and [pblast-cluster](http://icebert.github.io/pblat-cluster/)  
-<!-- [NCBI C++ Toolkit](ftp://ftp.ncbi.nih.gov/toolbox/ncbi_tools++/) -->
-* Edit Perl tools to use the right version (use the miniconda version)  
-** `r fontFmt("Scipio", custom_font)` uses `r fontFmt("Blat", custom_font)` to identify genes, however, `r fontFmt("Blat", custom_font)` is single-threaded and extremely slow. Download [pblat](http://icebert.github.io/pblat/) and edit `r fontFmt("scipio.pl", custom_font)` to use it instead.  
-*** A good genome annotation guide is available in [this link](https://gist.github.com/darencard/bb1001ac1532dd4225b030cf0cd61ce2), worth considering using it to improve `r fontFmt("Seqping", custom_font)`
-
-
-
-In addition, a few reference databases are needed:  
-1. Lentil transcriptome - [L. culinaris CSFL RefTrans V2](https://www.coolseasonfoodlegume.org/analysis/150)  
-2. Fabaceae full length protein sequences in FASTA format from [NCBI](https://www.ncbi.nlm.nih.gov/protein/?term=%22Fabaceae%22%5Bporgn%3A__txid3803%5D++NOT+uncharacterized+NOT+partial+NOT+mitochondrial+NOT+hypothetical+NOT+ribosomal+NOT+chloroplast) (using the following search string `"Fabaceae"[porgn:__txid3803] NOT uncharacterized NOT partial NOT mitochondrial NOT hypothetical NOT ribosomal NOT chloroplast`)  
-3. Repeat elements sequences in FASTA format - [RepBase](http://www.girinst.org/server/RepBase/protected/RepBase23.02.fasta.tar.gz) (Username: IdoBar Password: 6pjya8) and the [MIPS Repeat Element Database](ftp://ftpmips.helmholtz-muenchen.de/plants/REdat/). The 2 databases were filtered to include only plant species and combined.    
-4. Repeat elements sequences in HMM format - [Dfam.hmm](http://dfam.org/web_download/Current_Release/Dfam.hmm.gz)  
-
-
-```{bash gene_prediction}
-# create a new environment and install needed tools
-pyenv install miniconda2-latest
-pyenv shell miniconda2-latest
-conda install -c bioconda snap busco maker emboss genometools-genometools blat cd-hit blast repeatmodeler hmmer -c biocore blast-legacy # blast-plus, use boost version of augustus (augustus-3.2.3-boost1.57_0)
-conda install -c biocore blast-plus
-# Download and extract splign, scipio (http://www.webscipio.org/webscipio/download_scipio), glimmerhmm
-cd ~/etc/tools/Alignment
-wget ftp://ftp.ncbi.nlm.nih.gov/genomes/TOOLS/splign/linux-i64/splign.tar.gz
-
-# download and extract Seqping
-# edit seqping.sh with the tools folders' locations
-# edit 
-# Predict repeat elements from Lens culinaris genome using RepeatModeler 
-# see (https://gist.github.com/darencard/9a03d9a141c4fe5c77f909c47a455169) for faster implementation
-echo "cd \$PBS_O_WORKDIR; export PYENV_VERSION=miniconda2-latest; BuildDatabase -name Lens_culinaris -engine ncbi $HOME/data/Lens_culinaris_v1.0/Lens_culinaris_v1.0.fasta; unset PYENV_VERSION" | \
-qsub -V -l select=1:ncpus=12:mem=12GB,walltime=00:20:00 -m be -M i.bar@griffith.edu.au -N repeatdb 
-echo "cd \$PBS_O_WORKDIR; export PYENV_VERSION=miniconda2-latest; RepeatModeler -pa 12 -engine ncbi -database Lens_culinaris; unset PYENV_VERSION" | \
-qsub -V -l select=1:ncpus=12:mem=12GB,walltime=120:00:00 -q qweek_s -m be -M i.bar@griffith.edu.au -N repeatmodel # 4925272.pbsserver
-
-# combine and cluster Plant repeat elements
-cd $HOME/scratch/data/Lens_culinaris_v1.0/RepBase23.02.fasta
-cat athrep.ref oryrep.ref dcotrep.ref mcotrep.ref grasrep.ref plnrep.ref > ../RepBase23_Plant_rep.fasta
-cat RepBase23_Plant_rep.fasta mipsREdat_9.3p_Eudicot_TEs.fasta > Plant_rep.fasta
-usearch -cluster_fast Plant_rep.fasta -id 0.95 -sort length -centroids Plant_rep_0.95.fasta
-
-# Manually download and install RepeatMasker and needed perl libraries
-# edit RepeatMasker file
-sed -i.bak    /export/home/s2978925/.pyenv/versions/miniconda2-latest/bin/RepeatMasker
-
-# run Seqping
-echo "cd \$PBS_O_WORKDIR; export PYENV_VERSION=miniconda2-latest; ~/etc/tools/Annotation/Seqping/seqping.sh -t ../l.culinaris_csfl_reftransV2.fasta -g ../Lens_culinaris_v1.0.fasta -r ../Fabaceae_proteins_0.95.fasta -f ../mipsREdat_9.3p_Eudicot_TEs.fasta -m ../Dfam.hmm -o Seqping_output -c 5 -p 12 -s -l Gene_prediction_Seqping_C5.log 1>model.out 2>model.err" | qsub -V -l select=1:ncpus=12:mem=12GB,walltime=120:00:00 -q qweek_s -m be -M i.bar@griffith.edu.au -N seqping # 4960236.pbsserver
-
-
-
-
-
-```
-
-
-#### Resources
+***
+### Useful Resources
 * [Stacks2_linkage_mapping](https://github.com/IdoBar/Stacks2_linkage_mapping) - A GitHub repository of the R scripts used for this analysis.
 * [VCF-tricks](https://github.com/IARCbioinfo/VCF-tricks)
 * [VCF-downgrade](https://gist.github.com/danielecook/f1d80babd7d601a74981#file-vcf_downgrade-sh)
@@ -990,6 +921,73 @@ echo "cd \$PBS_O_WORKDIR; export PYENV_VERSION=miniconda2-latest; ~/etc/tools/An
 
 <!-- # required exporting LD_LIBRARY_PATH to include miniconda lib - see ~/.bash_profile -->
 <!-- # But caused issues with linked libraries -->
+<!-- ``` -->
+
+<!-- #### Gene Model Prediction from Lentil genome  -->
+<!-- Gene models were predicted from the _L. culinaris_ genome and transcriptome using `r fontFmt("Seqping", custom_font)` v0.1.45.1 [@chan_seqping:_2017], which requires the following dependencies: -->
+
+<!-- `r fontFmt("Seqping", custom_font)` is a gene model pipeline. In other words it links together many steps and programs to produce final model. For this reason, you must first install a number of programs that `r fontFmt("Seqping", custom_font)` depends on:   -->
+<!-- a. [BLAST 2.2.25](ftp://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/)   -->
+<!-- b. [CD-HIT 4.5.4](http://www.bioinformatics.org/downloads/index.php/cd-hit/)   -->
+<!-- c. [Exonerate 2.2](http://www.ebi.ac.uk/~guy/exonerate/)   -->
+<!-- d. [GlimmerHMM 3.0](ftp://ccb.jhu.edu/pub/software/glimmerhmm/)   -->
+<!-- e. [AUGUSTUS 2.6.1](http://bioinf.uni-greifswald.de/augustus/binaries/) ([BUSCO](http://busco.ezlab.org/) might be an easier alternative)   -->
+<!-- f. [SNAP-2012-05-17](http://korflab.ucdavis.edu/Software/)   -->
+<!-- g. [MAKER 2.28](http://www.yandell-lab.org/software/maker.html)   -->
+<!-- h. [EMBOSS 6.4.0](http://emboss.sourceforge.net/download/)   -->
+<!-- i. [HMMER 3](http://hmmer.janelia.org/software)   -->
+<!-- j. [RepeatMasker-3-3-0](http://www.repeatmasker.org/RMDownload.html)   -->
+<!-- k. [NCBI splign 2.0.8](ftp://ftp.ncbi.nlm.nih.gov/genomes/TOOLS/splign/linux-i64/splign.tar.gz) (includes binaries for `r fontFmt("compart", custom_font)`)   -->
+<!-- l. [scipio 1.4**](http://www.webscipio.org/webscipio/download_scipio_1_4)     -->
+<!-- m. [Seqping](https://sourceforge.net/projects/seqping/files/current/)   -->
+<!-- n. [pblat](http://icebert.github.io/pblat/) and [pblast-cluster](http://icebert.github.io/pblat-cluster/)   -->
+<!-- <!-- [NCBI C++ Toolkit](ftp://ftp.ncbi.nih.gov/toolbox/ncbi_tools++/) --> -->
+<!-- * Edit Perl tools to use the right version (use the miniconda version)   -->
+<!-- ** `r fontFmt("Scipio", custom_font)` uses `r fontFmt("Blat", custom_font)` to identify genes, however, `r fontFmt("Blat", custom_font)` is single-threaded and extremely slow. Download [pblat](http://icebert.github.io/pblat/) and edit `r fontFmt("scipio.pl", custom_font)` to use it instead.   -->
+<!-- *** A good genome annotation guide is available in [this link](https://gist.github.com/darencard/bb1001ac1532dd4225b030cf0cd61ce2), worth considering using it to improve `r fontFmt("Seqping", custom_font)` -->
+
+
+
+<!-- In addition, a few reference databases are needed:   -->
+<!-- 1. Lentil transcriptome - [L. culinaris CSFL RefTrans V2](https://www.coolseasonfoodlegume.org/analysis/150)   -->
+<!-- 2. Fabaceae full length protein sequences in FASTA format from [NCBI](https://www.ncbi.nlm.nih.gov/protein/?term=%22Fabaceae%22%5Bporgn%3A__txid3803%5D++NOT+uncharacterized+NOT+partial+NOT+mitochondrial+NOT+hypothetical+NOT+ribosomal+NOT+chloroplast) (using the following search string `"Fabaceae"[porgn:__txid3803] NOT uncharacterized NOT partial NOT mitochondrial NOT hypothetical NOT ribosomal NOT chloroplast`)   -->
+<!-- 3. Repeat elements sequences in FASTA format - [RepBase](http://www.girinst.org/server/RepBase/protected/RepBase23.02.fasta.tar.gz) (Username: IdoBar Password: 6pjya8) and the [MIPS Repeat Element Database](ftp://ftpmips.helmholtz-muenchen.de/plants/REdat/). The 2 databases were filtered to include only plant species and combined.     -->
+<!-- 4. Repeat elements sequences in HMM format - [Dfam.hmm](http://dfam.org/web_download/Current_Release/Dfam.hmm.gz)   -->
+
+
+<!-- ```{bash gene_prediction} -->
+<!-- # create a new environment and install needed tools -->
+<!-- pyenv install miniconda2-latest -->
+<!-- pyenv shell miniconda2-latest -->
+<!-- conda install -c bioconda snap busco maker emboss genometools-genometools blat cd-hit blast repeatmodeler hmmer -c biocore blast-legacy # blast-plus, use boost version of augustus (augustus-3.2.3-boost1.57_0) -->
+<!-- conda install -c biocore blast-plus -->
+<!-- # Download and extract splign, scipio (http://www.webscipio.org/webscipio/download_scipio), glimmerhmm -->
+<!-- cd ~/etc/tools/Alignment -->
+<!-- wget ftp://ftp.ncbi.nlm.nih.gov/genomes/TOOLS/splign/linux-i64/splign.tar.gz -->
+
+<!-- # download and extract Seqping -->
+<!-- # edit seqping.sh with the tools folders' locations -->
+<!-- # edit  -->
+<!-- # Predict repeat elements from Lens culinaris genome using RepeatModeler  -->
+<!-- # see (https://gist.github.com/darencard/9a03d9a141c4fe5c77f909c47a455169) for faster implementation -->
+<!-- echo "cd \$PBS_O_WORKDIR; export PYENV_VERSION=miniconda2-latest; BuildDatabase -name Lens_culinaris -engine ncbi $HOME/data/Lens_culinaris_v1.0/Lens_culinaris_v1.0.fasta; unset PYENV_VERSION" | \ -->
+<!-- qsub -V -l select=1:ncpus=12:mem=12GB,walltime=00:20:00 -m be -M i.bar@griffith.edu.au -N repeatdb  -->
+<!-- echo "cd \$PBS_O_WORKDIR; export PYENV_VERSION=miniconda2-latest; RepeatModeler -pa 12 -engine ncbi -database Lens_culinaris; unset PYENV_VERSION" | \ -->
+<!-- qsub -V -l select=1:ncpus=12:mem=12GB,walltime=120:00:00 -q qweek_s -m be -M i.bar@griffith.edu.au -N repeatmodel # 4925272.pbsserver -->
+
+<!-- # combine and cluster Plant repeat elements -->
+<!-- cd $HOME/scratch/data/Lens_culinaris_v1.0/RepBase23.02.fasta -->
+<!-- cat athrep.ref oryrep.ref dcotrep.ref mcotrep.ref grasrep.ref plnrep.ref > ../RepBase23_Plant_rep.fasta -->
+<!-- cat RepBase23_Plant_rep.fasta mipsREdat_9.3p_Eudicot_TEs.fasta > Plant_rep.fasta -->
+<!-- usearch -cluster_fast Plant_rep.fasta -id 0.95 -sort length -centroids Plant_rep_0.95.fasta -->
+
+<!-- # Manually download and install RepeatMasker and needed perl libraries -->
+<!-- # edit RepeatMasker file -->
+<!-- sed -i.bak    /export/home/s2978925/.pyenv/versions/miniconda2-latest/bin/RepeatMasker -->
+
+<!-- # run Seqping -->
+<!-- echo "cd \$PBS_O_WORKDIR; export PYENV_VERSION=miniconda2-latest; ~/etc/tools/Annotation/Seqping/seqping.sh -t ../l.culinaris_csfl_reftransV2.fasta -g ../Lens_culinaris_v1.0.fasta -r ../Fabaceae_proteins_0.95.fasta -f ../mipsREdat_9.3p_Eudicot_TEs.fasta -m ../Dfam.hmm -o Seqping_output -c 5 -p 12 -s -l Gene_prediction_Seqping_C5.log 1>model.out 2>model.err" | qsub -V -l select=1:ncpus=12:mem=12GB,walltime=120:00:00 -q qweek_s -m be -M i.bar@griffith.edu.au -N seqping # 4960236.pbsserver -->
+
 <!-- ``` -->
 
 ***
