@@ -7,7 +7,7 @@ devtools::source_gist("7f63547158ecdbacf31b54a58af0d1cc", filename = "Util.R") #
 # vignette("Inbred_Based_Populations") # OneMap tutorial
 # devtools::install_github("augusto-garcia/onemap")
 # Install and load needed packages
-package_list <- c("tidyverse", "qtl", "RColorBrewer", "Rsamtools", "doFuture", "foreach", "ASMap") # "radiator", 
+package_list <- c("tidyverse", "qtl", "RColorBrewer", "Rsamtools", "doFuture", "foreach", "ASMap", "vcfR") # "radiator", 
 pacman::p_load(char=package_list)
 
 # Onemap requires R>=3.4 and Rhtslib and zlibbioc
@@ -25,7 +25,7 @@ group_markers <- "LG"
 vcf_basename <- tools::file_path_sans_ext(basename(vcf_file))
   
 source("./Stacks2_linkage_mapping/src/vcf_filtration.R")
-vcf_filtration(vcf_file, miss_rates = seq(0.2, 0.15, -0.05), geno_rate = 0.8)
+vcf_filtration(vcf_file, miss_rates = seq(0.2, 0.15, -0.05), geno_rate = 0.85)
 
 #### ASMap ####
 # cleaned file to read
@@ -120,7 +120,7 @@ asmap_thres_df %>% filter(marker_num>150) %>% count(map_name)
 
 
 # selected p7 (from range)
-selected_p <- 20
+selected_p <- 16
 asmap <- asmap_thres_list[[selected_p]]
 LogMsg(glue::glue("Selected p.value is: {p_value_range[selected_p]}"))
 LogMsg(glue::glue("Number of markers in each linkage group: {paste(qtl::nmar(asmap), collapse=', ')}"))
@@ -166,41 +166,44 @@ pg <- profileGen(mapDHs, bychr = FALSE, stat.type = c("xo", "dxo", "miss"), id =
 miss_ind <- pg$stat$miss[pg$stat$miss>400]
 
 mapBC5 <- subsetCross(mapDHs, ind = !pg$stat$miss>400)
-mapRIL5 <- mstmap(mapBC5, bychr = FALSE, dist.fun = "kosambi", trace = TRUE, p.value = p_value_range[selected_p])
+mapRIL5_merged <- mergeCross(mapBC5, merge = list("L4" = c("L4", "L5"), 
+                                                   "L1" = c("L3","L1", "L2"), 
+                                                  "L12" = c("L13", "L12")))
+mapRIL5 <- mstmap(mapRIL5_merged, bychr = TRUE, dist.fun = "kosambi", trace = TRUE, p.value = 2) # p_value_range[selected_p]
 
 
 # calculate genetic distance
 # map2 <- quickEst(mapDH, map.function = "kosambi")
 
 # Visualise data
-lod_range <- seq(10,100, by = 5)
-
-foreach(l=lod_range) %dopar% {
-  pdf(filedate(sprintf("%s_asmap_lod%d_test", stacks_name, l), ".pdf", 
-               glue::glue("./plots/{stacks_name}/param_estimation")), width = 8, height = 8)
-  heatMap(mapRIL5, lmax = l)
-  dev.off()
-  return(NULL)
-  
-}
+# lod_range <- seq(10,100, by = 5)
+# 
+# foreach(l=lod_range) %dopar% {
+#   pdf(filedate(sprintf("%s_asmap_lod%d_test", stacks_name, l), ".pdf", 
+#                glue::glue("./plots/{stacks_name}/param_estimation")), width = 8, height = 8)
+#   heatMap(mapRIL5, lmax = l)
+#   dev.off()
+#   return(NULL)
+#   
+# }
 profileMark(mapRIL5, stat.type = c("seg.dist", "prop", "dxo", "recomb"),
             layout = c(1, 5), type = "l")
-heatMap(mapRIL5, lmax = 30, chr = "L.13")
+heatMap(mapRIL5, lmax = 20)
 nmar(mapRIL5)
 chrlen(mapRIL5)
 mapRIL5$geno$L.4
 # Split linkage group and merge with another (based on heatmap)
-mapRIL5_split <- breakCross(mapRIL5, split = list(`L.4` = "305093:50:+"), suffix = "alpha", sep = "")
-mapRIL5_merged <- mergeCross(mapRIL5_split, merge = list(`L.4` = c("L.4", "L.13"), 
-                             `L.1` = c("L.3","L.2", "L.1")))
+# mapRIL5_split <- breakCross(mapRIL5, split = list(`L.4` = "305093:50:+"), suffix = "alpha", sep = "")
+# mapRIL5_merged <- mergeCross(mapRIL5_split, merge = list(`L.4` = c("L.4", "L.13"), 
+#                              `L.1` = c("L.3","L.2", "L.1")))
 # mapRIL5_merged <- mstmap(mapRIL5_merged, bychr = FALSE, dist.fun = "kosambi", trace = TRUE, p.value = p_value_range[selected_p])
 # Remove markers from L.10,6,7,15
-heatMap(mapRIL5_merged, lmax = 30)
-nmar(mapRIL5_merged)
-chrlen(mapRIL5_merged)
-heatMap(mapRIL5_merged, lmax = 30, chr = "L.4")
+# heatMap(mapRIL5_merged, lmax = 30)
+# nmar(mapRIL5_merged)
+# chrlen(mapRIL5_merged)
+# heatMap(mapRIL5_merged, lmax = 30, chr = "L.4")
 # Push back markers with higher missing rates
-mapRIL5_added <- pushCross(mapRIL5_merged, type = "missing", pars = list(miss.thresh =
+mapRIL5_added <- pushCross(mapRIL5, type = "missing", pars = list(miss.thresh =
                                                                            0.1, max.rf = 0.3))
 # visualise
 heatMap(mapRIL5_added, lmax = 30)
@@ -219,17 +222,21 @@ mapRIL5b <- mstmap(mapRIL5b_merged, bychr = TRUE, trace = TRUE, dist.fun = "kosa
 pg1 <- profileGen(mapRIL5b, bychr = FALSE, stat.type = c("xo", "dxo","miss"), 
                   id = "Genotype", xo.lambda = 14, layout = c(1, 3), lty = 2, cex = 0.7)
 
+mapRIL5c <- mapRIL5b
 # remove problematic genotypes
-mapRIL5c <- mstmap(subsetCross(mapRIL5b, ind = !pg1$xo.lambda), bychr = TRUE, trace = TRUE, 
-                   dist.fun = "kosambi", p.value = 2)
+if (sum(pg1$xo.lambda)>0){
+  mapRIL5c <- mstmap(subsetCross(mapRIL5b, ind = !pg1$xo.lambda), bychr = TRUE, trace = TRUE, 
+                     dist.fun = "kosambi", p.value = 2)
+}
+
 profileMark(mapRIL5c, stat.type = c("seg.dist", "prop", "dxo", "recomb"),
             layout = c(1, 5), type = "l")
 # Push back distorted markers
 mapRIL5d <- pushCross(mapRIL5c, type = "seg.distortion", pars =
                        list(seg.ratio = "70:0:30"))
-mapRIL5e <- mstmap(mapRIL5d, bychr = TRUE, trace = TRUE, dist.fun =
-                    "kosambi", p.value = 2)
-mapRIL5e_merged <- mergeCross(mapRIL5d, merge = list(`L.1` = c("L.1", "UL2")))
+mapRIL5e <- jittermap(mstmap(mapRIL5d, bychr = TRUE, trace = TRUE, dist.fun =
+                    "kosambi", p.value = 2))
+mapRIL5e_merged <- mergeCross(mapRIL5e, merge = list("L1" = c("L1", "UL3")))
 mapRIL5e <- mstmap(mapRIL5e_merged, bychr = TRUE, trace = TRUE, dist.fun =
                      "kosambi", p.value = 2)
 # Check difference in linkage group lengths
@@ -237,7 +244,7 @@ round(chrlen(mapRIL5e) - chrlen(mapRIL5b), 5)
 # Check difference in number of markers 
 nmar(mapRIL5e) - nmar(mapRIL5b)
 # visualise
-heatMap(mapRIL5e, lmax = 30)
+dopdf(glue::glue("plots/{stacks_name}_pairwise_RF_LOD.pdf"), width = 8, height = 8, cmd = heatMap(mapRIL5e, lmax = 30))
 
 #### Compare linkage map to physical map ####
 unlinked_markers <- sapply(mapRIL5e$geno, function(lg) {if(length(lg$map>10)) return(names(lg$map))})
@@ -246,13 +253,22 @@ marker_map_df <- imap_dfr(mapRIL5e$geno, ~tibble(LG_name = .y, marker_name = mar
   mutate(Chr=sub("_.+", "", `#CHROM`))
 
 marker_map_sum <- marker_map_df %>% group_by(Chr) %>% summarise(num=n())
+# Find major chromosome in each linkage group (from physical map)
+find_major_chr <- function(map_table, lg){
+  map_table %>% filter(LG_name==lg) %>% group_by(Chr) %>% summarise(num=n()) %>% arrange(desc(num)) 
+}
+# find_major_chr(marker_map_df, "L1")
+lg_chr_match <- sapply(names(mapRIL5e$geno), function(lg) find_major_chr(marker_map_df, lg)[1,1])
+find_major_chr(marker_map_df, "L16")
 # Manually merge all linkage groups belonging to the same chromosome
-mapRIL5_chrom <- mergeCross(mapRIL5e, merge = list("LcChr1" = c("L.1", "L.8", "L.13"), 
-                           "LcChr2" = c("L.10", "L.5", "L.14", "L.15", "L.16"), "LcChr3"=c("L.11", "L.18"),
-                           "LcChr4" = c("L.7", "L.19" ), "LcChr5"=c("L.4", "L.21"), 
-                           "LcChr6" = c("L.2", "L.12", "L.22"), "LcChr7" = c("L.3", "L.23")))
+lens_chroms <- paste0("LcChr", 1:7)
+merge_list <- sapply(lens_chroms, function(chr) sub(".Chr", "", names(lg_chr_match)[lg_chr_match==chr]))
+mapRIL5_chrom <- mergeCross(mapRIL5e, merge = merge_list[sapply(merge_list, function(i) length(i)>1)])
+mapRIL5_split <- breakCross(mapRIL5_chrom, split = list("LcChr5" = c("173638:26:-")), suffix = "alpha", sep = "")
+mapRIL5_chrom <- mergeCross(mapRIL5_split, merge = list("LcChr2" = c("LcChr2", "LcChr5A")))
 # visualise
-heatMap(mapRIL5_chrom_final, lmax = 30)
+heatMap(mapRIL5_chrom, lmax = 30, chr = "LcChr5B")
+mapRIL5_chrom$geno$LcChr5$map[4:28]
 chrom_map_df <- imap_dfr(mapRIL5_chrom$geno, ~tibble(LG_name = .y, 
                                      marker_name = markernames(mapRIL5_chrom, .y))) %>%
   inner_join(clean_vcf[c(1:3)], by = c("marker_name" = "ID"))
@@ -262,23 +278,28 @@ drop_markers <- chrom_map_df %>% filter(LG_name %in% LG2drop$LG_name) %>% .[,"ma
 mapRIL5_chrom_final <-  mstmap(jittermap(drop.markers(mapRIL5_chrom, drop_markers)), 
                                bychr = TRUE, trace = TRUE, 
                                dist.fun ="kosambi", p.value = 2)
+# Fix linkage group names
+names(mapRIL5_chrom_final$geno)[1:2] <- c("LcChr4", "LcChr7") 
+names(mapRIL5_chrom_final$geno) <- sub("[A-z]$", "", names(mapRIL5_chrom_final$geno))
+mapRIL5_chrom_final$geno <- mapRIL5_chrom_final$geno[order(names(mapRIL5_chrom_final$geno))]
 # visualise
 heatMap(mapRIL5_chrom_final, lmax = 30)
-map_df <- imap_dfr(mapRIL5_chrom_final$geno, ~tibble(LG_name = .y, 
+map_sum_df <- imap_dfr(mapRIL5_chrom_final$geno, ~tibble(LG_name = .y, 
                                        marker_name = markernames(mapRIL5_chrom_final, .y))) %>%
   inner_join(clean_vcf[c(1:3)], by = c("marker_name" = "ID")) %>% 
-  mutate(chrom_match = map2_lgl(.x=LG_name, .y=`#CHROM`,.f=grepl)) # check if LG matches Chrom
+  mutate(Chr=sub("_.+", "", `#CHROM`), chrom_match = map2_lgl(.x=LG_name, .y=Chr,.f=grepl)) # check if LG matches Chrom
 # summarise rates of matching LG:Chrom at each chromosome
-map_match_rates <- map_df %>% group_by(LG_name) %>% summarise(match_rate=sum(chrom_match)/n())
-plot.map(mapRIL5_chrom_final)
+map_match_rates <- map_sum_df %>% group_by(LG_name) %>% summarise(match_rate=sum(chrom_match)/n())
+
+dopdf(filedate(glue::glue("Lentil_GBS_{stacks_name}_linkage_chromosome_map"), ext = ".pdf", outdir = "plots"), width = 8, height=6, cmd =  plot.map(mapRIL5_chrom_final, horizontal = FALSE))
 
 inds <- row.names(mapRIL5_chrom_final$geno[[1]]$data)
-markernames(mapRIL5_chrom_final)
+# markernames(mapRIL5_chrom_final)
 #### Save files for QTL analysis ####
 # Export map
 gmap_map <- imap_dfr(mapRIL5_chrom_final$geno, ~tibble(marker = markernames(mapRIL5_chrom_final, .y),
                                                        chr = .y, pos=.x$map)) %>%
-  write_csv(sprintf("./data/qtl2_files/Lentil_GBS_%s_gmap.csv", stacks_name))
+  write_csv(glue::glue("./data/qtl2_files/Lentil_GBS_{stacks_name}_gmap.csv"))
 # Save physical map for R/qtl2
 # Load marker map (extracted from gstacks.fa)
 # stacks_dir <- "../Analysis/ref_stacks/stacks2_population_04_12_2017"
@@ -310,7 +331,7 @@ genos %>% filter(grepl("RF$", rowname)) %>%
 yamls <- list.files("./data/qtl2_files/", "Lentil_GBS_LG.+\\d+dpi.yaml", full.names = TRUE)
 for (y in yamls){
   
-  system2("sed", args=c(glue::glue("-r 's/Lentil_GBS([A-z_]+.csv)/Lentil_GBS_{stacks_name}\\1/g'"),y),
-          stdout = sub("LG", sprintf("%s", stacks_name), y))
+  system2("sed", args=c(glue::glue("-r 's/Lentil_GBS([A-z_]+.csv)/Lentil_GBS_{stacks_name}\\1/g; s/pmap/# pmap/'"),y),
+          stdout = sub("LG", stacks_name, y))
 }
   
