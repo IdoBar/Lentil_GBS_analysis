@@ -648,7 +648,17 @@ Loci and QTL positions across the linkage map were prepared in R and exported fo
 In addition, the constructed genetic map and genotype-phenotype data were exported for analysis in `r fontFmt("Windows QTL Cartographer", custom_font)` v2.5_011 [@shengchu_wang_windows_2012], using a CIM approach and determine the contribution of each QTL to the phenotype variability. 
 
 #### SNP annotation 
-Physical (chromosomal) locations of the QTL peaks were determined and SNPs and genes were extracted from a range of 2 Mbp up and downstream of these locations. Functional annotation determined the effect of each SNP on the underlying genes.  
+Physical (chromosomal) locations of the QTL peaks were determined and SNPs and genes were extracted from a range of 20 Kbp up and downstream of these locations. Functional annotation determined the effect of each SNP on the underlying genes.  
+
+##### Annotation procedure
+1. Load genome (.fa) and gene models (.gff) files   
+2. Load all variants (.vcf) file  
+3. Load linkage map (gmap.csv) file
+4. Load QTL peaks table
+5. Identify QTL trait of interest, find min and max position(s)  
+6. Translate linkage map positions to genomic coordinates (based on marker name)  
+7. Subset all markers between those coordinates from the variants file (as GRanges)  
+8. Subset transcripts that intersect with the variants   
 
 ***
 ### Useful Resources
