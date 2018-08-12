@@ -15,7 +15,7 @@ options(stringsAsFactors = FALSE)
 
 
 #### Analysis in R/qtl2  ####
-stacks_name <- "M3m4n3"
+stacks_name <- "ref_stacks2"
 yaml_files <- dir("data/qtl2_files", "Lentil_GBS_.+\\.yaml", full.names = TRUE)
 Chr_search="LG"
 yaml_files <- yaml_files[grepl(stacks_name, yaml_files)]

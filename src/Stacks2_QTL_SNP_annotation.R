@@ -2,6 +2,12 @@
 
 devtools::source_gist("7f63547158ecdbacf31b54a58af0d1cc", filename = "Util.R")
 
+if(getRversion() >= "3.5.0") {
+  BiocManager::install(c("GenomicFeatures", "VariantAnnotation", "GenomicRanges", "Rsamtools", "plyranges"))
+  pacman::p_load(plyranges)
+}
+  
+
 pacman::p_load(char = c( "seqinr", "tidyverse", "GenomicFeatures", "VariantAnnotation", "GenomicRanges", "Rsamtools")) #  "plyranges", "BiocManager" requires R>=3.5
 # package.version("GenomicFeatures")
 # bioc_packages <- c("GenomicFeatures", "VariantAnnotation", "GenomicRanges", "Rsamtools")
@@ -14,43 +20,13 @@ genome_fa <- "../../../L_culinaris_genome/Lensculinaris_genome_v1.2.fasta"
 if (!file.exists(paste0(genome_fa, ".fai"))) indexFa(genome_fa)
 fa <- open(FaFile(genome_fa))
 # load gene models file
-gff_file <- "../../../L_culinaris_genome/Lensculinaris_1.2b_genes.gff3"
+gff_file <- "../../../L_culinaris_genome/Lensculinaris_1.2b_genes_fixed_phase.gff3"
 gff3 <- read_tsv(gff_file, col_names = c("seqid", "source", "type", "start", "end", "score", "strand",
                                            "phase", "attributes")) 
-#### Fix missing phasing information ####
-missing_phase <- gff3 %>% filter(type=="CDS", phase==".", (end-start)>=18)  %>% 
-  makeGRangesFromDataFrame(keep.extra.columns = TRUE)
 
-  # mutate(orig_id=seqid, seqid=gsub("ID=(.+);.+", "\\1", attributes)) %>% makeGRangesFromDataFrame()
-# system2("gunzip", args = c("-cd", genome_fa), stdout = "../../../L_culinaris_genome/Lensculinaris_genome_v1.2.fasta")
-missing_cds <- getSeq(fa, missing_phase)
-names(missing_cds) <- missing_phase$attributes
-# remove short ones
-# missing_cds
-# test_seq <- missing_cds[length(missing_cds)]
-all_cds_df <- lmap(missing_cds,  ~map(1:3, function(pos) {
-    tryCatch({
-      tibble(AA_seq=toString(Biostrings::translate(subseq(., start=pos))), 
-                    phase=pos-1, attributes=names(.))},
-             warning = function(c) {warning(c); NULL},
-             error = function(c) {warning(c); NULL}
-    )
-  }))  %>% map_df(bind_rows) # %>% filter(!grepl("\\*\\w+", AA_seq))
-
-good_cds <- all_cds_df %>% filter(!grepl("\\*\\w", AA_seq))
-
-# discard_cds <- missing_phase$attributes[!missing_phase$attributes %in% good_cds$attributes]
-# discard_pattern <- sub("cds(\\d+;)", "+[a-z]\\1", discard_cds)  # remove just cds and exons
-# discard_pattern <- sub("\\.cds(\\d+;).+", "", discard_cds) # remove entire ID
-# fix phase information
-gff3$phase[gff3$attributes %in% good_cds$attributes] <- good_cds$phase
-# Temporary fix (change all unfixable phases to 0)
-gff3$phase[gff3$type=="CDS" & gff3$phase=="."] <- 0
-fixed_gff3_file <- sub("(\\.gff[3]*)$", "_fixed_phase\\1", gff_file)
-gff3 <- gff3 %>% filter(!(type=="CDS" & phase==".")) %>% write_tsv(fixed_gff3_file)
 
 # gff3 %>% filter(!grepl(paste(discard_pattern, collapse = "|"), attributes))
-txdb <- makeTxDbFromGFF(fixed_gff3_file, format="gff3", dataSource = "v1.2 UoS",
+txdb <- makeTxDbFromGFF(gff3_file, format="gff3", dataSource = "v1.2 UoS",
                         organism = "Lens culinaris",
                         taxonomyId = 3864)
 # Match seqlevels between txdb and vcf
@@ -59,7 +35,7 @@ txdb <- makeTxDbFromGFF(fixed_gff3_file, format="gff3", dataSource = "v1.2 UoS",
 # Break the vcf by each isolate
 
 # Find all variants for each isolate and add it up to a list of data frames
-stacks_name <- "M3m4n3"
+stacks_name <- "ref_stacks2"
 recent_vcf <- recent_file("./data/intermediate_files/", glue::glue(".*{stacks_name}.+\\.clean.vcf"))
 
 snp_vcf <- VariantAnnotation::readVcf(recent_vcf)
@@ -68,7 +44,7 @@ sample_names <- samples(header(snp_vcf))
 parents <- sample_names[grepl("ILL.+RF", sample_names)]
 # Get a dataframe with all types of variants
 var_types <- c("Coding", "Intron", "FiveUTR", "ThreeUTR", "Intergenic", "Promoter")
-getAllVariants <- function(vcf, txdb, types){
+getAllVariantsDF <- function(vcf, txdb, types){
   # Get all variant types and combine into a large Granges object
   allvars <- map(types, function(typ) locateVariants(vcf, txdb, get(glue::glue("{typ}Variants"))())) %>%
     # lmap(getMethod(c, "GenomicRanges"))
@@ -77,10 +53,18 @@ getAllVariants <- function(vcf, txdb, types){
   return(as.data.frame(allvars,row.names = 1:length(allvars)))
 }
 
+getAllVariantsGR <- function(vcf, txdb, types){
+  # Get all variant types and combine into a large Granges object
+  allvars <- map(types, function(typ) locateVariants(vcf, txdb, get(glue::glue("{typ}Variants"))())) %>%
+    # lmap(getMethod(c, "GenomicRanges"))
+    do.call(getMethod(c, "GenomicRanges"), .)
+  
+  # return(as.data.frame(allvars,row.names = 1:length(allvars)))
+}
 vars_by_sample <- DataFrameList(lapply(parents,
                      function(s) getAllVariants(snp_vcf[,s], txdb, var_types))) %>%
   lapply(., S4Vectors::expand, keepEmptyRows = TRUE) %>% DataFrameList()
-
+varsGR <- getAllVariantsGR(snp_vcf[,parents[1]], txdb, var_types)
 # test_DF_list <- vars_by_sample %>%
 #   lapply(., S4Vectors::expand, keepEmptyRows = TRUE) %>% DataFrameList()
 # varsDF <- getAllVariants(snp_vcf[,s], txdb, var_types)
@@ -100,10 +84,23 @@ codingDF <- as.data.frame(coding, row.names = 1:length(coding)) %>% mutate(varna
 # Retrieve SNPs under the QTL (any snps between tag_144852_343285964 to tag_148476_364570997)
 LOD_peaks <- readxl::read_excel(recent_file("./QTL_results", 
                                             glue::glue("LOD_peaks_{stacks_name}.+\\.xlsx")))
-gmap <- readr::read_csv(glue::glue("./data/qtl2_files/Lentil_GBS_stacks_{stacks_name}_gmap.csv"))
-marker_map <- as.data.frame(rowRanges(snp_vcf)) %>% rownames_to_column("var_id") %>% as.tibble()
-sel_qtl <- LOD_peaks %>% filter(lod==max(lod))
-qtl_region <- gmap %>% filter(chr==sel_qtl$chr, pos>=sel_qtl$ci_lo, pos<=sel_qtl$ci_hi)
+gmap <- readr::read_csv(glue::glue("./data/qtl2_files/Lentil_GBS_{stacks_name}_gmap.csv"))
+marker_map <- as.data.frame(rowRanges(snp_vcf)) %>% rownames_to_column("var_id") # %>% as.tibble()
+snp_ranges <- rowRanges(snp_vcf)
+# Find QTL regions for the trait on interest and manually select range
+qtl_trait <- "Leaf_lesion_percent"
+qtl_dpi <- "14"
+qtl_region_markers <- function(gmap, region_chr, region_start, region_end){
+  gmap %>%
+    dplyr::filter(chr==region_chr, pos>=region_start, pos<=region_end)
+} 
+qtl_regions <- LOD_peaks %>% filter(lodcolumn==qtl_trait, dpi==qtl_dpi) %>% 
+  .[,c("chr", "ci_lo", "ci_hi")] %>% pmap_dfr(~qtl_region_markers(gmap, ..1, ..2,..3))
+
+
+qtl_region_snps <- snp_ranges[names(snp_ranges) %in% qtl_regions$marker]
+  
+# qtl_region <- gmap %>% filter(chr==sel_qtl$chr, pos>=sel_qtl$ci_lo, pos<=sel_qtl$ci_hi)
 # boundary_qtl_snps <- c("tag_144852_343285964", "tag_148476_364570997")
 # marker_map <-  read_tsv("data/qtl2_files/Lentil_GBS_pmap.csv")
 # Load marker map (extracted from gstacks.fa)
@@ -111,44 +108,56 @@ qtl_region <- gmap %>% filter(chr==sel_qtl$chr, pos>=sel_qtl$ci_lo, pos<=sel_qtl
 # 
 # stacks_dir <- "../Analysis/ref_stacks/stacks2_population_04_12_2017"
 # marker_map <- read_tsv(file.path(stacks_dir, "tag_chrom.map"))
-qtl_boundaries <-  marker_map %>% filter(var_id %in% qtl_region$marker) %>% # , seqnames=="LcChr2"
-  arrange(start) %>% droplevels()
-# extract all SNPs between the 2 regions
-surrounding_interval <- 2e6
-bound_summary <- qtl_boundaries %>% group_by(seqnames) %>% 
-  summarise(qtl_start=min(start), qtl_end=max(end)) %>% mutate(qtl_range=qtl_end-qtl_start)
-for (chr in levels(bound_summary$seqnames)){
-  chr="LcChr2"
-  start_OL <- bound_summary %>% filter(seqnames==chr) %>% .[,"qtl_start"]
-}
 
 
-qtl_snps <- as.data.frame(varsDF) %>% dplyr::select(-name) %>%
-  # mutate_if(is.list, possibly(`[[`, NA)) %>%
-  filter(seqnames %in% qtl_boundaries$seqnames,
-                              start >= qtl_boundaries$start[1], 
-                              start <= qtl_boundaries$start[nrow(qtl_boundaries)]) %>% distinct()
+qtl_region_tx <- transcriptsByOverlaps(txdb, qtl_region_snps, type = "any", maxgap = 2e4)
+
+#   
+#   extractTranscriptSeqs(fa, qtl_region_tx)
+#                                   cdsBy(txdb, by="tx", use.names=TRUE))
+# 
+# 
+# qtl_boundaries <-  marker_map %>% 
+#   filter(var_id %in% qtl_region_markers$marker) %>% # , seqnames=="LcChr2"
+#   arrange(start) %>% droplevels()
+# # extract all SNPs between the 2 regions
+# surrounding_interval <- 0
+# bound_summary <- qtl_boundaries %>% group_by(seqnames) %>% 
+#   summarise(qtl_start=min(start), qtl_end=max(end)) %>% mutate(qtl_range=qtl_end-qtl_start)
+# for (chr in levels(bound_summary$seqnames)){
+#   chr="LcChr2"
+#   start_OL <- bound_summary %>% filter(seqnames==chr) %>% .[,"qtl_start"]
+# }
+
+qtl_coding <- codingDF %>% filter(varname %in% names(qtl_region_snps)) %>%
+  dplyr::select(seqnames, start, end, width, strand, CONSEQUENCE)
+qtl_snps <- as.data.frame(varsDF) %>% dplyr::select(-name) %>% #head()
+  inner_join(x = data.frame(TXID=as.character(qtl_region_tx$tx_id), tx_name=qtl_region_tx$tx_name), y = .) %>% distinct() %>% 
+  left_join(qtl_coding) 
+xlsx::write.xlsx(qtl_snps, 
+                 filedate(glue::glue("{stacks_name}_QTL_snps"), 
+                            ".xlsx", "QTL_results"), row.names = FALSE)
+
+
 # Extract genomic region under the QTL
-snp_tx <- transcripts(txdb, filter=list(tx_id=unique(qtl_snps$TXID)))
-gene_ids <- sub("\\.\\d+$", "", snp_tx$tx_name)
+# snp_tx <- transcripts(txdb, filter=list(tx_id=unique(qtl_snps$TXID)))
+gene_ids <- sub("\\.\\d+$", "", qtl_region_tx$tx_name)
 # gene_pattern <- paste(glue::glue('ID={gene_ids};'), collapse = "|")
-#### Extract transcripts from genome ####
-cds_seqs <- extractTranscriptSeqs(fa,
-                                  cdsBy(txdb, by="tx", use.names=TRUE))
-tx_seqs <- cds_seqs[snp_tx$tx_name]
-snp_genes <- gff3 %>% mutate(attributes=gsub('\"', '', attributes, fixed = TRUE)) %>% 
+qtl_genes <- gff3 %>% mutate(attributes=gsub('\"', '', attributes, fixed = TRUE)) %>% 
   separate(attributes, c("ID", "Name", "Description"), sep = ";.+?=") %>%
   filter(type=="gene", Name %in% gene_ids) #%>% 
-  
-  # mutate(ID=sub("ID=(.+?);.+", "\\1", attributes)) %>% 
-  
+# Save to excel table
+xlsx::write.xlsx(as.data.frame(qtl_genes), 
+                 filedate(glue::glue("{stacks_name}_QTL_genes"), 
+                          ".xlsx", "QTL_results"), row.names = FALSE)
 
-head(codingDF)
-
-
-save.image(filedate(glue::glue("Lentil_GBS_{stacks_name}_QTL_SNP_annotation"), 
-                    ext = ".RData", outdir = "data"))
-
+#### Extract transcripts from genome ####
+tx_seqs <- getSeq(fa, qtl_region_tx)
+names(tx_seqs) <- qtl_region_tx$tx_name
+# cds_seqs <- extractTranscriptSeqs(fa,
+#                         cdsBy(txdb, by="tx", use.names=TRUE)) %>%
+#   .[snp_tx$tx_name]
+# tx_seqs <- cds_seqs[snp_tx$tx_name]
 
 
 # keep only chromosomes of interest
@@ -156,10 +165,13 @@ save.image(filedate(glue::glue("Lentil_GBS_{stacks_name}_QTL_SNP_annotation"),
 
 
 # Save associated SNPs transcripts to file
-seqinr::write.fasta(as.list(translate(tx_seqs)), names = names(tx_seqs),
-                    file.out = filedate(glue::glue("{stacks_name}_QTL_genes_cds"), 
-                                        ".fasta", "QTL_results"))
-
+# seqinr::write.fasta(as.list(translate(cds_seqs)), names = names(tx_seqs),
+#           file.out = filedate(glue::glue("{stacks_name}_QTL_genes_cds"), 
+#                                         ".faa", "QTL_results"))
+seqinr::write.fasta(as.list(tx_seqs), names = names(tx_seqs),
+          file.out = filedate(glue::glue("{stacks_name}_QTL_genes_txs"), 
+                                        ".fna", "QTL_results"))
+save.image(filedate(glue::glue("Lentil_GBS_{stacks_name}_QTL_SNP_annotation"), ext = ".RData", outdir = "data/intermediate_files"))
 #### Prepare summary table ####
 # Load BLAST results
 # blast_fields <- unlist(strsplit("qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore subj_desc subj_sci_name subj_kingdom", split=" "))  # pcov
